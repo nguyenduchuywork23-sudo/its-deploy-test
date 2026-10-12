@@ -116,10 +116,10 @@ Sau khi Backend trên Render đã Active:
 3. Hệ thống sẽ tạo sẵn 4 tài khoản mặc định:
    | Email | Mật khẩu mặc định | Vai trò (Role) | Họ và Tên |
    | :--- | :--- | :--- | :--- |
-   | `sysadmin@cg.edu.vn` | `Password@123` | **SYSADMIN** | Quản Trị Viên Hệ Thống |
-   | `leadmentor@cg.edu.vn` | `Password@123` | **LEAD_MENTOR** | Nguyễn Văn Mentor Trưởng |
-   | `mentor@cg.edu.vn` | `Password@123` | **MENTOR** | Trần Thị Mentor Phụ Trách |
-   | `intern@cg.edu.vn` | `Password@123` | **INTERN** | Lê Văn Thực Tập Sinh |
+   | `sysadmin@codegym.vn` | `Password@123` | **SYSADMIN** | Quản Trị Viên Hệ Thống |
+   | `leadmentor@codegym.vn` | `Password@123` | **LEAD_MENTOR** | Nguyễn Văn Mentor Trưởng |
+   | `mentor@codegym.vn` | `Password@123` | **MENTOR** | Trần Thị Mentor Phụ Trách |
+   | `intern@codegym.vn` | `Password@123` | **INTERN** | Lê Văn Thực Tập Sinh |
 
 ---
 
@@ -152,7 +152,7 @@ Dự án đã có sẵn file [frontend/vercel.json](file:///c:/Users/Nguye/Downl
 
 1. Mở URL frontend trên Vercel: `https://internship-tracking-system.vercel.app`.
 2. Đăng nhập bằng tài khoản:
-   - Email: `mentor@cg.edu.vn`
+   - Email: `mentor@codegym.vn`
    - Mật khẩu: `Password@123`
 3. Kiểm tra các chức năng:
    - Xem tổng quan Mentor Dashboard (KPIs, Active Groups, Cảnh báo).

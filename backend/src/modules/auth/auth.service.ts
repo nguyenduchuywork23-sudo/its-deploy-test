@@ -90,8 +90,13 @@ export class AuthService {
    * Đăng nhập người dùng bằng email và mật khẩu
    */
   async login(dto: LoginDto): Promise<TokenResponse> {
+    const cleanEmail = dto.email.toLowerCase().trim();
+    if (!cleanEmail.endsWith('@codegym.vn')) {
+      throw new BadRequestException('Hệ thống chỉ chấp nhận tài khoản có định dạng email @codegym.vn');
+    }
+
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase().trim() },
+      where: { email: cleanEmail },
     });
 
     if (!user) {
@@ -222,25 +227,25 @@ export class AuthService {
 
     const accounts = [
       {
-        email: 'sysadmin@cg.edu.vn',
+        email: 'sysadmin@codegym.vn',
         fullName: 'Quản Trị Viên Hệ Thống (SysAdmin)',
         role: Role.SYSADMIN,
         password: hashedPassword,
       },
       {
-        email: 'leadmentor@cg.edu.vn',
+        email: 'leadmentor@codegym.vn',
         fullName: 'Nguyễn Văn Mentor Trưởng',
         role: Role.LEAD_MENTOR,
         password: hashedPassword,
       },
       {
-        email: 'mentor@cg.edu.vn',
+        email: 'mentor@codegym.vn',
         fullName: 'Trần Thị Mentor Phụ Trách',
         role: Role.MENTOR,
         password: hashedPassword,
       },
       {
-        email: 'intern@cg.edu.vn',
+        email: 'intern@codegym.vn',
         fullName: 'Lê Văn Thực Tập Sinh',
         role: Role.INTERN,
         password: hashedPassword,
@@ -262,21 +267,21 @@ export class AuthService {
         // Cập nhật role nếu đã tồn tại
         const updated = await this.prisma.user.update({
           where: { email: acc.email },
-          data: { role: acc.role, fullName: acc.fullName },
+          data: { role: acc.role, fullName: acc.fullName, password: hashedPassword },
         });
         results.push({ email: updated.email, role: updated.role, updated: true });
       }
     }
 
-    // Gán mentor@cg.edu.vn vào nhóm GRP001 đầu tiên nếu có
+    // Gán mentor@codegym.vn vào nhóm GRP001 đầu tiên nếu có
     const targetGroup = await this.prisma.group.findFirst({
       where: { code: 'GRP001' },
     });
     const mentorUser = await this.prisma.user.findUnique({
-      where: { email: 'mentor@cg.edu.vn' },
+      where: { email: 'mentor@codegym.vn' },
     });
     const internUser = await this.prisma.user.findUnique({
-      where: { email: 'intern@cg.edu.vn' },
+      where: { email: 'intern@codegym.vn' },
     });
 
     if (targetGroup && mentorUser) {
@@ -293,6 +298,16 @@ export class AuthService {
           await this.prisma.groupMember.update({
             where: { id: member.id },
             data: { userId: internUser.id },
+          });
+        } else {
+          await this.prisma.groupMember.create({
+            data: {
+              groupId: targetGroup.id,
+              userId: internUser.id,
+              memberCode: 'MEM01',
+              fullName: internUser.fullName,
+              role: 'Thực tập sinh',
+            },
           });
         }
       }

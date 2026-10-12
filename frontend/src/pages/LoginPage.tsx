@@ -18,7 +18,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     role: 'SYSADMIN',
     label: 'Quản Trị Viên (SysAdmin)',
     badge: 'Toàn quyền',
-    email: 'sysadmin@cg.edu.vn',
+    email: 'sysadmin@codegym.vn',
     desc: 'Quản lý nhóm, phân quyền mentor',
     gradient: 'from-purple-500/10 to-indigo-500/10 border-purple-500/30 hover:border-purple-500/60',
     iconBg: 'from-purple-600 to-indigo-700 text-white',
@@ -27,7 +27,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     role: 'LEAD_MENTOR',
     label: 'Mentor Trưởng (Lead)',
     badge: '100 nhóm',
-    email: 'leadmentor@cg.edu.vn',
+    email: 'leadmentor@codegym.vn',
     desc: 'Theo dõi toàn bộ 100 nhóm thực tập',
     gradient: 'from-blue-500/10 to-cyan-500/10 border-blue-500/30 hover:border-blue-500/60',
     iconBg: 'from-blue-600 to-cyan-600 text-white',
@@ -36,7 +36,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     role: 'MENTOR',
     label: 'Mentor Phụ Trách',
     badge: 'Phụ trách',
-    email: 'mentor@cg.edu.vn',
+    email: 'mentor@codegym.vn',
     desc: 'Xem & cấu hình nhóm trực tiếp',
     gradient: 'from-emerald-500/10 to-teal-500/10 border-emerald-500/30 hover:border-emerald-500/60',
     iconBg: 'from-emerald-600 to-teal-700 text-white',
@@ -45,7 +45,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     role: 'INTERN',
     label: 'Thực Tập Sinh (Intern)',
     badge: 'Chỉ xem',
-    email: 'intern@cg.edu.vn',
+    email: 'intern@codegym.vn',
     desc: 'Xem tiến độ nhóm tham gia',
     gradient: 'from-amber-500/10 to-orange-500/10 border-amber-500/30 hover:border-amber-500/60',
     iconBg: 'from-amber-500 to-orange-600 text-white',
@@ -64,8 +64,14 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password) {
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
       setErrorMsg('Vui lòng nhập đầy đủ Email và Mật khẩu');
+      return;
+    }
+
+    if (!cleanEmail.toLowerCase().endsWith('@codegym.vn')) {
+      setErrorMsg('Email đăng nhập bắt buộc phải có đuôi tên miền @codegym.vn');
       return;
     }
 
@@ -73,7 +79,7 @@ export const LoginPage: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      await login(email.trim(), password);
+      await login(cleanEmail, password);
       navigate('/dashboard');
     } catch (err: any) {
       setErrorMsg(err?.message || 'Đăng nhập không thành công, vui lòng kiểm tra lại');

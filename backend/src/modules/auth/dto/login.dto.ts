@@ -11,6 +11,9 @@ import { Role } from '@prisma/client';
 
 export class LoginDto {
   @IsEmail({}, { message: 'Email không hợp lệ' })
+  @Matches(/^[a-zA-Z0-9._%+-]+@codegym\.vn$/i, {
+    message: 'Email bắt buộc phải có đuôi tên miền @codegym.vn',
+  })
   @IsNotEmpty({ message: 'Email không được để trống' })
   email!: string;
 

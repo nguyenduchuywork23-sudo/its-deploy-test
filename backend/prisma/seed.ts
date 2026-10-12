@@ -12,25 +12,25 @@ async function main() {
   // 1. Seed demo users
   const accounts = [
     {
-      email: 'sysadmin@cg.edu.vn',
+      email: 'sysadmin@codegym.vn',
       fullName: 'Quản Trị Viên Hệ Thống (SysAdmin)',
       role: Role.SYSADMIN,
       password: hashedPassword,
     },
     {
-      email: 'leadmentor@cg.edu.vn',
+      email: 'leadmentor@codegym.vn',
       fullName: 'Nguyễn Văn Mentor Trưởng',
       role: Role.LEAD_MENTOR,
       password: hashedPassword,
     },
     {
-      email: 'mentor@cg.edu.vn',
+      email: 'mentor@codegym.vn',
       fullName: 'Trần Thị Mentor Phụ Trách',
       role: Role.MENTOR,
       password: hashedPassword,
     },
     {
-      email: 'intern@cg.edu.vn',
+      email: 'intern@codegym.vn',
       fullName: 'Lê Văn Thực Tập Sinh',
       role: Role.INTERN,
       password: hashedPassword,
