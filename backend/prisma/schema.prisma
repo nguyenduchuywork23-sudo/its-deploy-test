@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConnectionStatus {
+  NEVER_TESTED
+  SUCCESS
+  ERROR
+}
+
+enum SyncStatus {
+  NEVER_SYNCED
+  SUCCESS
+  ERROR
+  PARTIAL
+  STALE
+}
+
+enum SyncSource {
+  JIRA
+  GITHUB
+}
+
+enum Role {
+  SYSADMIN
+  LEAD_MENTOR
+  MENTOR
+  INTERN
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  password     String
+  fullName     String?
+  role         Role     @default(MENTOR)
+  refreshToken String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedGroups Group[]       @relation("MentorGroups")
+  memberInGroups GroupMember[]
+
+  @@map("users")
+}
+
+model Group {
+  id                    String           @id @default(uuid())
+  code                  String           @unique
+  name                  String
+  memberCount           Int              @default(10)
+  mentorId              String?
+  mentor                User?            @relation("MentorGroups", fields: [mentorId], references: [id], onDelete: SetNull)
+  jiraProjectKey        String?
+  jiraBaseUrl           String?
+  jiraConnectionStatus  ConnectionStatus @default(NEVER_TESTED)
+  jiraLastTestedAt      DateTime?
+  jiraErrorMessage      String?          @db.Text
+  githubConnectionStatus ConnectionStatus @default(NEVER_TESTED)
+  githubLastTestedAt    DateTime?
+  githubErrorMessage    String?          @db.Text
+  syncStatus            SyncStatus       @default(NEVER_SYNCED)
+  lastSyncAt            DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  repositories GithubRepository[]
+  members      GroupMember[]
+  syncLogs     SyncLog[]
+  metrics      DailyGroupMetric[]
+  jiraIssues   JiraIssue[]
+  commits      GithubCommit[]
+  pullRequests GithubPullRequest[]
+
+  @@index([syncStatus])
+  @@index([code])
+  @@index([mentorId])
+  @@map("groups")
+}
+
+model GithubRepository {
+  id        String   @id @default(uuid())
+  groupId   String
+  repoUrl   String
+  repoName  String
+  repoOwner String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, repoUrl])
+  @@index([groupId])
+  @@map("github_repositories")
+}
+
+model GroupMember {
+  id         String   @id @default(uuid())
+  groupId    String
+  userId     String?
+  memberCode String?
+  fullName   String?
+  role       String?
+  createdAt  DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model SyncLog {
+  id               String     @id @default(uuid())
+  groupId          String
+  source           SyncSource
+  status           SyncStatus
+  startedAt        DateTime   @default(now())
+  finishedAt       DateTime?
+  recordsProcessed Int        @default(0)
+  errorMessage     String?    @db.Text
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([groupId, source, startedAt])
+  @@map("sync_logs")
+}
+
+model DailyGroupMetric {
+  id           String   @id @default(uuid())
+  groupId      String
+  date         DateTime @db.Date
+  taskDone     Int      @default(0)
+  subtaskDone  Int      @default(0)
+  commitCount  Int      @default(0)
+  prCreated    Int      @default(0)
+  prMerged     Int      @default(0)
+  blocked      Int      @default(0)
+  calculatedAt DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, date])
+  @@index([date])
+  @@map("daily_group_metrics")
+}
+
+model JiraIssue {
+  id        String   @id @default(uuid())
+  groupId   String
+  issueKey  String
+  issueType String
+  summary   String   @db.Text
+  status    String
+  sprint    String?
+  createdAt DateTime
+  updatedAt DateTime
+  url       String
+
+  group       Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  transitions JiraTransition[]
+
+  @@unique([groupId, issueKey])
+  @@index([groupId, issueType, status])
+  @@map("jira_issues")
+}
+
+model JiraTransition {
+  id         String   @id @default(uuid())
+  issueId    String
+  fromStatus String?
+  toStatus   String
+  changedAt  DateTime
+
+  issue JiraIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId, changedAt])
+  @@map("jira_transitions")
+}
+
+model GithubCommit {
+  id           String   @id @default(uuid())
+  groupId      String
+  repositoryId String
+  sha          String
+  message      String   @db.Text
+  author       String?
+  committedAt  DateTime
+  url          String
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, sha])
+  @@index([groupId, committedAt])
+  @@map("github_commits")
+}
+
+model GithubPullRequest {
+  id           String    @id @default(uuid())
+  groupId      String
+  repositoryId String
+  number       Int
+  title        String    @db.Text
+  state        String
+  createdAt    DateTime
+  mergedAt     DateTime?
+  url          String
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, repositoryId, number])
+  @@index([groupId, createdAt])
+  @@index([groupId, mergedAt])
+  @@map("github_pull_requests")
+}
