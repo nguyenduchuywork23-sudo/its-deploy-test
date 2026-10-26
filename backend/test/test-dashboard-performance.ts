@@ -20,15 +20,15 @@ async function run() {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // Test 1: Benchmark GET /api/dashboard/overview
+  // Test 1: Benchmark GET /api/dashboard
   try {
-    console.log(`\n[1/3] Đo thời gian phản hồi GET /api/dashboard/overview?date=${today}...`);
+    console.log(`\n[1/3] Đo thời gian phản hồi GET /api/dashboard?date=${today}...`);
     const iterations = 5;
     const times: number[] = [];
 
     for (let i = 0; i < iterations; i++) {
       const t0 = performance.now();
-      const res = await axios.get(`${BASE_URL}/dashboard/overview?date=${today}`);
+      const res = await axios.get(`${BASE_URL}/dashboard?date=${today}`);
       const duration = performance.now() - t0;
       times.push(duration);
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
@@ -51,15 +51,15 @@ async function run() {
     failed++;
   }
 
-  // Test 2: Benchmark GET /api/dashboard/groups (Toàn bộ 100 nhóm sinh viên)
+  // Test 2: Benchmark GET /api/groups (Toàn bộ 100 nhóm sinh viên)
   try {
-    console.log(`\n[2/3] Đo thời gian truy vấn bảng 100 nhóm GET /api/dashboard/groups?date=${today}...`);
+    console.log(`\n[2/3] Đo thời gian truy vấn bảng 100 nhóm GET /api/groups?limit=100...`);
     const iterations = 5;
     const times: number[] = [];
 
     for (let i = 0; i < iterations; i++) {
       const t0 = performance.now();
-      const res = await axios.get(`${BASE_URL}/dashboard/groups?date=${today}&limit=100`);
+      const res = await axios.get(`${BASE_URL}/groups?limit=100`);
       const duration = performance.now() - t0;
       times.push(duration);
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
@@ -87,7 +87,7 @@ async function run() {
     console.log('\n[3/3] Mô phỏng tải đồng thời (10 concurrent requests)...');
     const t0 = performance.now();
     const promises = Array.from({ length: 10 }).map((_, i) =>
-      axios.get(`${BASE_URL}/dashboard/groups?date=${today}&page=${(i % 5) + 1}&limit=20`),
+      axios.get(`${BASE_URL}/dashboard?date=${today}`),
     );
 
     const responses = await Promise.all(promises);

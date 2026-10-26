@@ -65,101 +65,104 @@ export class SyncSchedulerService {
 
     this.isRunning = true;
     const startedAt = new Date();
-    this.logger.log(`Starting sync batch (incremental=${options.incremental})...`);
+    try {
+      this.logger.log(`Starting sync batch (incremental=${options.incremental})...`);
 
-    // 1. Lấy tất cả các nhóm có cấu hình Jira hoặc GitHub
-    const groups = await this.prisma.group.findMany({
-      include: {
-        repositories: true,
-      },
-      orderBy: { code: 'asc' },
-    });
+      // 1. Lấy tất cả các nhóm có cấu hình Jira hoặc GitHub
+      const groups = await this.prisma.group.findMany({
+        include: {
+          repositories: true,
+        },
+        orderBy: { code: 'asc' },
+      });
 
-    const summary: BatchSyncSummary = {
-      startedAt,
-      totalGroups: groups.length,
-      successCount: 0,
-      errorCount: 0,
-      partialCount: 0,
-      skippedCount: 0,
-      errors: [],
-    };
+      const summary: BatchSyncSummary = {
+        startedAt,
+        totalGroups: groups.length,
+        successCount: 0,
+        errorCount: 0,
+        partialCount: 0,
+        skippedCount: 0,
+        errors: [],
+      };
 
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
-      const hasJira = Boolean(g.jiraProjectKey);
-      const hasGithub = g.repositories && g.repositories.length > 0;
+      for (let i = 0; i < groups.length; i++) {
+        const g = groups[i];
+        const hasJira = Boolean(g.jiraProjectKey);
+        const hasGithub = g.repositories && g.repositories.length > 0;
 
-      if (!hasJira && !hasGithub) {
-        summary.skippedCount++;
-        continue;
-      }
+        if (!hasJira && !hasGithub) {
+          summary.skippedCount++;
+          continue;
+        }
 
-      try {
-        // Đồng bộ độc lập từng nhóm (Error Isolation)
-        const result: SyncGroupResult = await this.syncService.syncGroup(g.id, {
-          incremental: options.incremental,
-        });
+        try {
+          // Đồng bộ độc lập từng nhóm (Error Isolation)
+          const result: SyncGroupResult = await this.syncService.syncGroup(g.id, {
+            incremental: options.incremental,
+          });
 
-        if (result.overallStatus === 'SUCCESS') {
-          summary.successCount++;
-        } else if (result.overallStatus === 'PARTIAL') {
-          summary.partialCount++;
-        } else {
+          if (result.overallStatus === 'SUCCESS') {
+            summary.successCount++;
+          } else if (result.overallStatus === 'PARTIAL') {
+            summary.partialCount++;
+          } else {
+            summary.errorCount++;
+            summary.errors.push({
+              groupId: g.id,
+              groupCode: g.code,
+              error: result.jira.error || result.github.error || 'Đồng bộ thất bại',
+            });
+          }
+        } catch (err: any) {
+          // Lỗi một nhóm không làm dừng toàn bộ tiến trình (US-20 AC2)
           summary.errorCount++;
+          const errMsg = err?.message || 'Lỗi không xác định khi đồng bộ';
           summary.errors.push({
             groupId: g.id,
             groupCode: g.code,
-            error: result.jira.error || result.github.error || 'Đồng bộ thất bại',
+            error: errMsg,
           });
+          this.logger.error(`[Group ${g.code}] Isolated sync error: ${errMsg}`);
         }
-      } catch (err: any) {
-        // Lỗi một nhóm không làm dừng toàn bộ tiến trình (US-20 AC2)
-        summary.errorCount++;
-        const errMsg = err?.message || 'Lỗi không xác định khi đồng bộ';
-        summary.errors.push({
-          groupId: g.id,
-          groupCode: g.code,
-          error: errMsg,
-        });
-        this.logger.error(`[Group ${g.code}] Isolated sync error: ${errMsg}`);
+
+        // Kiểm soát tần suất gọi Jira API và GitHub API tránh Rate Limit (US-20 AC3)
+        if (i < groups.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
       }
 
-      // Kiểm soát tần suất gọi Jira API và GitHub API tránh Rate Limit (US-20 AC3)
-      if (i < groups.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    }
-
-    const finishedAt = new Date();
-    summary.finishedAt = finishedAt;
-    summary.durationMs = finishedAt.getTime() - startedAt.getTime();
-    this.lastSummary = summary;
-    this.isRunning = false;
-
-        this.logger.log(
-      `Finished sync batch in ${summary.durationMs}ms: Total=${summary.totalGroups}, Success=${summary.successCount}, Partial=${summary.partialCount}, Error=${summary.errorCount}, Skipped=${summary.skippedCount}`,
-    );
-
-    // US-20: Compute metric sau khi sync hoàn tất.
-    // Lỗi compute metric không làm thay đổi kết quả sync.
-    try {
-      const today = toVnDateString();
-      const metricResult = await this.metricsService.computeForDate(today);
+      const finishedAt = new Date();
+      summary.finishedAt = finishedAt;
+      summary.durationMs = finishedAt.getTime() - startedAt.getTime();
+      this.lastSummary = summary;
 
       this.logger.log(
-        `[US-20] Metrics computed after cron: ${metricResult.computed}/${metricResult.total} in ${metricResult.durationMs}ms`,
+        `Finished sync batch in ${summary.durationMs}ms: Total=${summary.totalGroups}, Success=${summary.successCount}, Partial=${summary.partialCount}, Error=${summary.errorCount}, Skipped=${summary.skippedCount}`,
       );
-    } catch (metricErr: unknown) {
-      const message =
-        metricErr instanceof Error ? metricErr.message : String(metricErr);
 
-      this.logger.error(
-        `[US-20] Metrics compute failed after cron: ${message}`,
-      );
+      // US-20: Compute metric sau khi sync hoàn tất.
+      // Lỗi compute metric không làm thay đổi kết quả sync.
+      try {
+        const today = toVnDateString();
+        const metricResult = await this.metricsService.computeForDate(today);
+
+        this.logger.log(
+          `[US-20] Metrics computed after cron: ${metricResult.computed}/${metricResult.total} in ${metricResult.durationMs}ms`,
+        );
+      } catch (metricErr: unknown) {
+        const message =
+          metricErr instanceof Error ? metricErr.message : String(metricErr);
+
+        this.logger.error(
+          `[US-20] Metrics compute failed after cron: ${message}`,
+        );
+      }
+
+      return summary;
+    } finally {
+      this.isRunning = false;
     }
-
-    return summary;
   }
 
   /**

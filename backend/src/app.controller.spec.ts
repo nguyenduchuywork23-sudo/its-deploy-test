@@ -15,8 +15,18 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('should return running status info', () => {
+      const res = appController.getHello();
+      expect(res.status).toBe('ok');
+      expect(res.message).toBe('Internship Tracking System API is running');
+      expect(res.timestamp).toBeDefined();
+    });
+
+    it('should return health status', () => {
+      const res = appController.getHealth();
+      expect(res.status).toBe('ok');
+      expect(res.uptime).toBeDefined();
+      expect(res.timestamp).toBeDefined();
     });
   });
 });

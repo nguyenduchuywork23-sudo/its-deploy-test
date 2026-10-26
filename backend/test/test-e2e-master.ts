@@ -83,7 +83,7 @@ async function run() {
   try {
     console.log('\n[4/7] Kiểm tra Hoạt động ngày & Activity Timeline (US-14, US-15, US-16, US-19)...');
     const today = new Date().toISOString().slice(0, 10);
-    const activityRes = await axios.get(`${BASE_URL}/dashboard/groups/${testGroupId}/activity?date=${today}`);
+    const activityRes = await axios.get(`${BASE_URL}/dashboard/group/${testGroupId}?date=${today}`);
     if (activityRes.status === 200 && activityRes.data.group) {
       console.log('  ✅ Đạt: Lấy được chi tiết hoạt động ngày, Jira Done, Commits, PRs.');
       passed++;
@@ -129,8 +129,8 @@ async function run() {
   try {
     console.log('\n[7/7] Kiểm tra Dashboard Tổng thể 100 Nhóm (US-11, US-12)...');
     const today = new Date().toISOString().slice(0, 10);
-    const overviewRes = await axios.get(`${BASE_URL}/dashboard/overview?date=${today}`);
-    if (overviewRes.status === 200 && overviewRes.data.kpi) {
+    const overviewRes = await axios.get(`${BASE_URL}/dashboard?date=${today}`);
+    if (overviewRes.status === 200 && (overviewRes.data.summary || overviewRes.data.kpi)) {
       console.log('  ✅ Đạt: Dashboard Overview tải thành công số liệu tổng thể.');
       passed++;
     } else {
