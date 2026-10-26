@@ -1,5 +1,6 @@
 // backend/src/modules/sprint/sprint.service.ts
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   DONE_STATUSES,
@@ -33,12 +34,24 @@ export class SprintService {
    * Sprint "hiện tại" = sprint có updatedAt mới nhất trong các issue.
    * Nếu không có issue nào có sprint → dùng toàn bộ issue.
    */
-  async getSprintOverview(groupId: string): Promise<SprintOverview> {
+  async getSprintOverview(
+    groupId: string,
+    user?: { id: string; role: Role },
+  ): Promise<SprintOverview> {
     const group = await this.prisma.group.findUnique({
       where: { id: groupId },
-      select: { id: true, code: true, name: true },
+      include: { members: true },
     });
     if (!group) throw new BadRequestException('Không tìm thấy nhóm');
+
+    if (user) {
+      if (user.role === Role.MENTOR && group.mentorId !== user.id) {
+        throw new ForbiddenException('Bạn chỉ có quyền xem sprint của nhóm mình phụ trách');
+      }
+      if (user.role === Role.INTERN && !group.members.some((m) => m.userId === user.id)) {
+        throw new ForbiddenException('Bạn chỉ có quyền xem sprint của nhóm bạn là thành viên');
+      }
+    }
 
     const issues = await this.prisma.jiraIssue.findMany({
       where: { groupId },

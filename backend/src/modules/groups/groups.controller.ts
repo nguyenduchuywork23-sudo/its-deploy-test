@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -12,6 +13,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Role } from '@prisma/client';
 import 'multer';
 import { GroupsService } from './groups.service';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -25,7 +27,12 @@ export class GroupsController {
 
   @Post('import')
   @UseInterceptors(FileInterceptor('file'))
-  import(@UploadedFile() file: Express.Multer.File) {
+  import(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+    if (user && user.role !== Role.SYSADMIN && user.role !== Role.LEAD_MENTOR) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (SysAdmin) hoặc Lead Mentor mới có quyền nhập danh sách nhóm từ file',
+      );
+    }
     return this.groups.import(file);
   }
 
@@ -64,43 +71,52 @@ export class GroupsController {
   }
 
   @Post(':id/jira/test')
-  testJira(@Param('id') id: string) {
-    return this.groups.testJira(id);
+  testJira(@Param('id') id: string, @CurrentUser() user: any) {
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền kiểm tra kết nối Jira');
+    }
+    return this.groups.testJira(id, user);
   }
 
   @Post(':id/github/test')
-  testGithub(@Param('id') id: string) {
-    return this.groups.testGithub(id);
+  testGithub(@Param('id') id: string, @CurrentUser() user: any) {
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền kiểm tra kết nối GitHub');
+    }
+    return this.groups.testGithub(id, user);
   }
 
   @Post(':id/sync')
-  sync(@Param('id') id: string) {
-    return this.groups.sync(id);
+  sync(@Param('id') id: string, @CurrentUser() user: any) {
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền kích hoạt đồng bộ');
+    }
+    return this.groups.sync(id, user);
   }
 
   @Get(':id/sync-logs')
-  getSyncLogs(@Param('id') id: string) {
-    return this.groups.getSyncLogs(id);
+  getSyncLogs(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.getSyncLogs(id, user);
   }
 
   @Get(':id/issues')
-  getIssues(@Param('id') id: string) {
-    return this.groups.getIssues(id);
+  getIssues(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.getIssues(id, user);
   }
 
   @Get(':id/commits')
-  getCommits(@Param('id') id: string) {
-    return this.groups.getCommits(id);
+  getCommits(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.getCommits(id, user);
   }
 
   @Get(':id/pull-requests')
-  getPullRequests(@Param('id') id: string) {
-    return this.groups.getPullRequests(id);
+  getPullRequests(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.getPullRequests(id, user);
   }
 
   @Get(':id/members')
-  getMembers(@Param('id') id: string) {
-    return this.groups.getMembers(id);
+  getMembers(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.getMembers(id, user);
   }
 
   @Post(':id/members')

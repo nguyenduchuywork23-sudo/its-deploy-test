@@ -273,9 +273,9 @@ export class AuthService {
       }
     }
 
-    // Gán mentor@codegym.vn vào nhóm GRP001 đầu tiên nếu có
-    const targetGroup = await this.prisma.group.findFirst({
-      where: { code: 'GRP001' },
+    // Gán mentor@codegym.vn và intern@codegym.vn vào nhóm mẫu CG-JAVA-01 và GRP001
+    const sampleGroups = await this.prisma.group.findMany({
+      where: { code: { in: ['CG-JAVA-01', 'GRP001'] } },
     });
     const mentorUser = await this.prisma.user.findUnique({
       where: { email: 'mentor@codegym.vn' },
@@ -284,31 +284,39 @@ export class AuthService {
       where: { email: 'intern@codegym.vn' },
     });
 
-    if (targetGroup && mentorUser) {
-      await this.prisma.group.update({
-        where: { id: targetGroup.id },
-        data: { mentorId: mentorUser.id },
-      });
+    for (const grp of sampleGroups) {
+      if (mentorUser) {
+        await this.prisma.group.update({
+          where: { id: grp.id },
+          data: { mentorId: mentorUser.id },
+        });
+      }
 
       if (internUser) {
-        const member = await this.prisma.groupMember.findFirst({
-          where: { groupId: targetGroup.id },
+        const existingLinked = await this.prisma.groupMember.findFirst({
+          where: { groupId: grp.id, userId: internUser.id },
         });
-        if (member) {
-          await this.prisma.groupMember.update({
-            where: { id: member.id },
-            data: { userId: internUser.id },
+        if (!existingLinked) {
+          const firstMember = await this.prisma.groupMember.findFirst({
+            where: { groupId: grp.id },
+            orderBy: { createdAt: 'asc' },
           });
-        } else {
-          await this.prisma.groupMember.create({
-            data: {
-              groupId: targetGroup.id,
-              userId: internUser.id,
-              memberCode: 'MEM01',
-              fullName: internUser.fullName,
-              role: 'Thực tập sinh',
-            },
-          });
+          if (firstMember) {
+            await this.prisma.groupMember.update({
+              where: { id: firstMember.id },
+              data: { userId: internUser.id },
+            });
+          } else {
+            await this.prisma.groupMember.create({
+              data: {
+                groupId: grp.id,
+                userId: internUser.id,
+                memberCode: `${grp.code}01`,
+                fullName: internUser.fullName,
+                role: 'Thực tập sinh',
+              },
+            });
+          }
         }
       }
     }

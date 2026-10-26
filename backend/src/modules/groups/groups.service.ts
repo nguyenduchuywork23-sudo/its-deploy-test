@@ -187,8 +187,8 @@ export class GroupsService {
     });
   }
 
-  async testJira(id: string) {
-    const group = await this.findOne(id);
+  async testJira(id: string, user?: { id: string; role: Role }) {
+    const group = await this.findOne(id, user);
 
     if (!group.jiraProjectKey) {
       throw new BadRequestException('Nhóm chưa cấu hình Jira Project Key');
@@ -211,8 +211,8 @@ export class GroupsService {
     return result;
   }
 
-  async testGithub(id: string) {
-    const group = await this.findOne(id);
+  async testGithub(id: string, user?: { id: string; role: Role }) {
+    const group = await this.findOne(id, user);
 
     if (!group.repositories.length) {
       throw new BadRequestException('Nhóm chưa cấu hình GitHub repository');
@@ -250,16 +250,18 @@ export class GroupsService {
     return { owner: m[1], repo: m[2] };
   }
 
-  async sync(id: string) {
+  async sync(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.syncService.syncGroup(id);
   }
 
-  async getSyncLogs(id: string) {
+  async getSyncLogs(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.syncService.getSyncLogs(id, 50);
   }
 
-  async getIssues(id: string) {
-    await this.findOne(id);
+  async getIssues(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.prisma.jiraIssue.findMany({
       where: { groupId: id },
       include: {
@@ -271,8 +273,8 @@ export class GroupsService {
     });
   }
 
-  async getCommits(id: string) {
-    await this.findOne(id);
+  async getCommits(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.prisma.githubCommit.findMany({
       where: { groupId: id },
       orderBy: { committedAt: 'desc' },
@@ -280,8 +282,8 @@ export class GroupsService {
     });
   }
 
-  async getPullRequests(id: string) {
-    await this.findOne(id);
+  async getPullRequests(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.prisma.githubPullRequest.findMany({
       where: { groupId: id },
       orderBy: { createdAt: 'desc' },
@@ -289,8 +291,8 @@ export class GroupsService {
     });
   }
 
-  async getMembers(id: string) {
-    await this.findOne(id);
+  async getMembers(id: string, user?: { id: string; role: Role }) {
+    await this.findOne(id, user);
     return this.prisma.groupMember.findMany({
       where: { groupId: id },
       orderBy: { createdAt: 'asc' },

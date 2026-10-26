@@ -26,7 +26,8 @@
     "test:periodic": "ts-node test/test-periodic-sync.ts",
     "test:incremental": "ts-node test/test-incremental-sync.ts",
     "test:performance": "ts-node test/test-dashboard-performance.ts",
-    "test:qa-master": "ts-node test/test-e2e-master.ts"
+    "test:qa-master": "ts-node test/test-e2e-master.ts",
+    "test:rbac": "ts-node test/test-rbac-audit.ts"
   },
   "dependencies": {
     "@nestjs/cli": "^10.0.0",

@@ -3,15 +3,21 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { MetricsService } from './metrics.service';
 import { ComputeMetricsDto } from './dto/compute-metrics.dto';
 import { isValidDateString, toVnDateString } from '../../common/utils/date.util';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
+@UseGuards(OptionalJwtAuthGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}
@@ -23,7 +29,11 @@ export class MetricsController {
   async computeOne(
     @Param('id') id: string,
     @Query('date') date?: string,
+    @CurrentUser() user?: any,
   ) {
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền tính toán metric');
+    }
     const dateStr = date ?? toVnDateString();
     if (!isValidDateString(dateStr)) {
       throw new BadRequestException(`Ngày không hợp lệ: "${dateStr}"`);
@@ -38,7 +48,11 @@ export class MetricsController {
   async computeAll(
     @Query('date') date?: string,
     @Body() dto?: ComputeMetricsDto,
+    @CurrentUser() user?: any,
   ) {
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền tính toán metric');
+    }
     const dateStr = date ?? toVnDateString();
     if (!isValidDateString(dateStr)) {
       throw new BadRequestException(`Ngày không hợp lệ: "${dateStr}"`);
