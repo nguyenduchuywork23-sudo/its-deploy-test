@@ -1,0 +1,3 @@
+ALTER TABLE "groups"
+ADD COLUMN "githubLastSyncAt" TIMESTAMP(3),
+ADD COLUMN "jiraLastSyncAt" TIMESTAMP(3);

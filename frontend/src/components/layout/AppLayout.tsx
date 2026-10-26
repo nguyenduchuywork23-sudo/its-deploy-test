@@ -34,12 +34,30 @@ function getRoleBadge(role?: Role) {
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
-  const { user, logout, isIntern } = useAuth();
+  const { user, logout, isIntern, isMentor, isLeadMentor } = useAuth();
 
-  const nav = [
-    { to: '/dashboard', label: 'Dashboard Tiến độ' },
-    { to: '/groups', label: 'Quản lý nhóm' },
-  ];
+  const nav = isIntern
+    ? [
+        { to: '/groups', label: 'Nhóm thực tập của tôi' },
+        { to: '/dashboard', label: 'Tiến độ dự án' },
+      ]
+    : isMentor
+    ? [
+        { to: '/dashboard', label: 'Tiến độ nhóm phụ trách' },
+        { to: '/alerts', label: 'Cần chú ý' },
+        { to: '/groups', label: 'Nhóm phụ trách' },
+      ]
+    : isLeadMentor
+    ? [
+        { to: '/dashboard', label: 'Báo cáo Học viện' },
+        { to: '/alerts', label: 'Cần chú ý & Rủi ro' },
+        { to: '/groups', label: 'Giám sát Nhóm' },
+      ]
+    : [
+        { to: '/dashboard', label: 'Dashboard Hệ thống' },
+        { to: '/alerts', label: 'Cảnh báo Lỗi' },
+        { to: '/groups', label: 'Quản lý Nhóm' },
+      ];
 
   const roleBadge = getRoleBadge(user?.role);
   const initials = user?.fullName
@@ -65,11 +83,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 className="w-9 h-9 rounded-xl object-cover shadow-sm ring-1 ring-slate-200/80 group-hover:scale-105 transition-transform"
               />
               <div className="flex flex-col">
-                <span className="font-bold text-slate-900 text-base leading-tight group-hover:text-blue-600 transition-colors">
-                  Internship Tracker
+                <span className="font-bold text-slate-900 text-sm sm:text-base leading-tight group-hover:text-blue-600 transition-colors">
+                  CodeGym ITS
                 </span>
-                <span className="text-[11px] font-medium text-slate-400 leading-tight">
-                  Mentor Portal • Jira & GitHub
+                <span className="text-[11px] text-slate-500 leading-tight">
+                  Theo dõi tiến độ thực tập
                 </span>
               </div>
             </Link>
@@ -82,9 +100,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <Link
                     key={item.to}
                     to={item.to}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                       active
-                        ? 'bg-blue-50 text-blue-700 shadow-sm shadow-blue-100'
+                        ? 'bg-blue-50 text-blue-700'
                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                     }`}
                   >
@@ -98,18 +116,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Right Header Controls */}
           <div className="flex items-center gap-3 sm:gap-4">
             {/* Live Backend Status indicator */}
-            <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/60 text-emerald-700 text-[11px] font-medium">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span>API Sẵn sàng</span>
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200/60 text-emerald-700 text-[11px] font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span>Đang kết nối</span>
             </div>
 
             {/* User Profile Pill & Logout */}
             {user ? (
               <div className="flex items-center gap-2.5 pl-2 sm:border-l sm:border-slate-200">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-slate-800 to-slate-700 text-white font-semibold text-xs flex items-center justify-center ring-2 ring-blue-500/20 shadow-sm shrink-0">
+                <div className="w-8 h-8 rounded-full bg-slate-800 text-white font-semibold text-xs flex items-center justify-center ring-1 ring-slate-700 shadow-xs shrink-0">
                   {initials}
                 </div>
 
@@ -148,7 +163,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             ) : (
               <Link
                 to="/login"
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs transition"
               >
                 Đăng nhập
               </Link>
@@ -157,36 +172,29 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      {/* Intern Read-Only Banner notice if user is intern */}
+      {/* Intern Workspace Top Greeting Banner */}
       {isIntern && (
-        <div className="bg-amber-500 text-white text-xs py-1.5 px-4 text-center font-semibold flex items-center justify-center gap-2 shadow-xs">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span>Bạn đang đăng nhập dưới vai trò Thực tập sinh (Chế độ chỉ xem dữ liệu)</span>
+        <div className="bg-slate-900 text-slate-200 text-xs py-2 px-4 text-center font-medium flex items-center justify-center gap-2 border-b border-slate-800 shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>Không gian thực tập • Theo dõi tiến độ Sprint & hoạt động dự án của nhóm bạn</span>
         </div>
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">{children}</main>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">{children}</main>
 
       {/* Modern Footer */}
-      <footer className="border-t border-slate-200/80 bg-white/50 backdrop-blur-sm py-4">
+      <footer className="border-t border-slate-200/80 bg-white/70 py-4">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="Logo" className="w-4 h-4 rounded object-cover" />
-            <span className="font-semibold text-slate-700">ITS v2.0</span>
+            <span className="font-semibold text-slate-700">CodeGym ITS</span>
             <span>•</span>
-            <span>Hệ thống giám sát và quản lý tiến độ thực tập tốt nghiệp</span>
+            <span>Hệ thống giám sát tiến độ thực tập</span>
           </div>
-          <div className="flex items-center gap-4 text-[11px]">
-            <span className="text-slate-400">
-              Jira Cloud: <strong className="text-slate-600">cg-ictu.atlassian.net</strong>
-            </span>
+          <div className="flex items-center gap-3 text-[11px] text-slate-400">
+            <span>Jira: <span className="text-slate-600 font-mono">cg-ictu.atlassian.net</span></span>
             <span>•</span>
-            <span className="text-slate-400">
-              GitHub: <strong className="text-slate-600">GrowthZ</strong>
-            </span>
+            <span>GitHub: <span className="text-slate-600 font-mono">GrowthZ</span></span>
           </div>
         </div>
       </footer>

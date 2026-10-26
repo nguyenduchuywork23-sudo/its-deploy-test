@@ -97,7 +97,24 @@ export class JiraService {
 
   private mapErrorMessage(error: AxiosError): string {
     const status = error.response?.status;
-    if (status === 400) return 'Request không hợp lệ (400)';
+    if (status === 400) {
+      const data = error.response?.data as
+        | { errorMessages?: string[]; errors?: Record<string, string> }
+        | undefined;
+
+      const details = [
+        ...(data?.errorMessages ?? []),
+        ...Object.values(data?.errors ?? {}),
+      ].filter(Boolean);
+
+      this.logger.error(
+        `Jira HTTP 400: ${JSON.stringify(data ?? error.message)}`,
+      );
+
+      return details.length
+        ? `Jira 400: ${details.join('; ')}`
+        : 'Request không hợp lệ (400); xem log backend';
+    }
     if (status === 401) return 'Sai email hoặc API token (401)';
     if (status === 403) return 'Token thiếu quyền truy cập project (403)';
     if (status === 404) return 'Không tìm thấy project key hoặc URL (404)';
@@ -252,7 +269,7 @@ export class JiraService {
       const jqlDate = `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(
         d.getUTCDate(),
       )} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-      jqlParts.push(`updated >= "${jqlDate}"`);
+      jqlParts.push(`AND updated >= "${jqlDate}"`);
     }
     jqlParts.push('ORDER BY updated DESC');
 
@@ -318,7 +335,7 @@ export class JiraService {
       const jqlDate = `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(
         d.getUTCDate(),
       )} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-      jqlParts.push(`updated >= "${jqlDate}"`);
+      jqlParts.push(`AND updated >= "${jqlDate}"`);
     }
     jqlParts.push('ORDER BY updated DESC');
 
@@ -368,10 +385,72 @@ export class JiraService {
    * [MỚI] Helper public: lấy sprint name từ fields.
    * Dùng trong SyncService để không phải duplicate logic.
    */
+
+async inspectSprintFields(
+  projectKey: string,
+  baseUrl: string,
+): Promise<any> {
+  const client = this.buildAxios(baseUrl);
+
+  const res = await client.get('/rest/api/3/field');
+
+  const fields: any[] = res.data ?? [];
+
+  return fields
+    .filter((field) =>
+      /sprint/i.test(field.name ?? '') ||
+      /sprint/i.test(field.id ?? ''),
+    )
+    .map((field) => ({
+      id: field.id,
+      name: field.name,
+      custom: field.custom,
+      schema: field.schema,
+    }));
+}
+
+
+
+
+
   getSprintName(
     fields: any,
     sprintFieldId = JIRA_API.SPRINT_FIELD_DEFAULT,
   ): string | null {
     return this.extractSprintName(fields, sprintFieldId);
+  }
+
+  /**
+   * Lấy danh sách thành viên/users có thể được gán task trong project Jira
+   */
+  async getAssignableUsers(
+    projectKey: string,
+    baseUrl?: string,
+  ): Promise<Array<{ displayName: string; email?: string; accountId: string }>> {
+    const email = process.env.JIRA_EMAIL;
+    const token = process.env.JIRA_API_TOKEN;
+    if (!email || !token) return [];
+    const targetUrl = baseUrl || process.env.JIRA_BASE_URL || 'https://cg-ictu.atlassian.net';
+    try {
+      const client = this.buildAxios(targetUrl);
+      const res = await client.get('/rest/api/3/user/assignable/search', {
+        params: { project: projectKey, maxResults: 100 },
+      });
+      return (res.data || [])
+        .filter(
+          (u: any) =>
+            u.accountType === 'atlassian' &&
+            !u.displayName?.includes('addon_') &&
+            !u.displayName?.includes('Bot'),
+        )
+        .map((u: any) => ({
+          displayName: u.displayName || '',
+          email: u.emailAddress || '',
+          accountId: u.accountId,
+        }));
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch assignable users for ${projectKey}: ${err.message}`);
+      return [];
+    }
   }
 }

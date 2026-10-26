@@ -26,6 +26,21 @@ export class GroupsService {
     return this.importer.importFromBuffer(file.buffer);
   }
 
+  async getMentors() {
+    return this.prisma.user.findMany({
+      where: {
+        role: { in: [Role.MENTOR, Role.LEAD_MENTOR] },
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+      },
+      orderBy: { fullName: 'asc' },
+    });
+  }
+
   async list(params: {
     page?: number;
     limit?: number;
@@ -394,5 +409,156 @@ export class GroupsService {
       where: { groupId },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  /**
+   * Tự động quét và đồng bộ thành viên/lập trình viên thực tế từ Jira & GitHub
+   */
+  async syncMembersFromSources(groupId: string, user?: { id: string; role: Role }) {
+    const group = await this.findOne(groupId, user);
+    if (user && user.role === Role.INTERN) {
+      throw new ForbiddenException('Thực tập sinh không có quyền đồng bộ thành viên');
+    }
+
+    const discoveredNames = new Set<string>();
+
+    // 1. Quét từ Jira Project Assignable Users
+    if (group.jiraProjectKey) {
+      try {
+        const jiraUsers = await this.jira.getAssignableUsers(group.jiraProjectKey, group.jiraBaseUrl || undefined);
+        for (const u of jiraUsers) {
+          if (u.displayName && u.displayName.trim().length > 1) {
+            discoveredNames.add(u.displayName.trim());
+          }
+        }
+      } catch (err: any) {
+        // ignore Jira fetch error
+      }
+    }
+
+    // 2. Quét từ GitHub Commits đã đồng bộ trong CSDL
+    const commitAuthors = await this.prisma.githubCommit.findMany({
+      where: { groupId },
+      select: { author: true },
+      distinct: ['author'],
+    });
+    for (const c of commitAuthors) {
+      if (
+        c.author &&
+        c.author.trim().length > 1 &&
+        !c.author.includes('[bot]') &&
+        !c.author.toLowerCase().includes('github-actions')
+      ) {
+        discoveredNames.add(c.author.trim());
+      }
+    }
+
+    // 3. Quét từ GitHub Contributors API trực tiếp
+    if (group.repositories && group.repositories.length > 0) {
+      for (const repo of group.repositories) {
+        const match = repo.repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+        if (match) {
+          const owner = match[1];
+          const repoName = match[2].replace(/\.git$/, '');
+          try {
+            const contributors = await this.github.getContributors(owner, repoName);
+            for (const c of contributors) {
+              if (c.login && !c.login.includes('[bot]')) {
+                discoveredNames.add(c.login.trim());
+              }
+            }
+          } catch (err) {
+            // ignore GitHub fetch error
+          }
+        }
+      }
+    }
+
+    if (discoveredNames.size === 0) {
+      throw new BadRequestException(
+        'Chưa phát hiện được lập trình viên nào từ Jira hoặc GitHub của nhóm này. Hãy chắc chắn bạn đã cấu hình đúng mã dự án Jira hoặc Repository GitHub và nhấn Đồng bộ trước.',
+      );
+    }
+
+    // Danh sách các tên mẫu mặc định
+    const defaultSampleNames = [
+      'nguyễn văn an',
+      'trần thị bích',
+      'lê hoàng cường',
+      'phạm minh đức',
+      'hoàng thị giang',
+      'đỗ quốc hùng',
+      'vũ thuỳ linh',
+      'bùi quang nam',
+      'ngô hải phong',
+      'đặng quỳnh trang',
+    ];
+
+    // Lấy danh sách thành viên hiện có
+    const currentMembers = await this.prisma.groupMember.findMany({ where: { groupId } });
+
+    // Lọc bỏ các thành viên mẫu / placeholder giả lập
+    const dummyIds = currentMembers
+      .filter((m) => {
+        const lower = (m.fullName || '').toLowerCase().trim();
+        return (
+          lower.startsWith('sinh viên mẫu') ||
+          lower.startsWith('học viên codegym') ||
+          lower.startsWith('học viên') ||
+          defaultSampleNames.includes(lower)
+        );
+      })
+      .map((m) => m.id);
+
+    if (dummyIds.length > 0) {
+      await this.prisma.groupMember.deleteMany({
+        where: { id: { in: dummyIds } },
+      });
+    }
+
+    // Danh sách thành viên thực tế còn lại
+    const remainingMembers = await this.prisma.groupMember.findMany({ where: { groupId } });
+    const existingNames = new Set(
+      remainingMembers.map((m) => (m.fullName || '').toLowerCase().trim()),
+    );
+
+    const prefix = group.code ? group.code.toUpperCase().replace(/[^A-Z0-9]/g, '') : 'GRP';
+    let addedCount = 0;
+    let nextIndex = remainingMembers.length + 1;
+
+    for (const name of discoveredNames) {
+      if (!existingNames.has(name.toLowerCase())) {
+        const isLeader = nextIndex === 1;
+        await this.prisma.groupMember.create({
+          data: {
+            groupId,
+            memberCode: `${prefix}${String(nextIndex).padStart(2, '0')}`,
+            fullName: name,
+            role: isLeader ? 'Nhóm trưởng (Jira/Git)' : 'Lập trình viên (Jira/Git)',
+          },
+        });
+        existingNames.add(name.toLowerCase());
+        addedCount++;
+        nextIndex++;
+      }
+    }
+
+    const updatedMembers = await this.prisma.groupMember.findMany({
+      where: { groupId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    await this.prisma.group.update({
+      where: { id: groupId },
+      data: { memberCount: updatedMembers.length },
+    });
+
+    return {
+      success: true,
+      addedCount,
+      totalMembers: updatedMembers.length,
+      members: updatedMembers,
+      message: `Đã tích hợp thành công ${addedCount} thành viên thực tế từ Jira và GitHub vào nhóm!`,
+    };
   }
 }

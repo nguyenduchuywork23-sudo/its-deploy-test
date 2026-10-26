@@ -71,6 +71,8 @@ export interface FetchCommitsOptions {
 }
 
 export interface FetchPullRequestsOptions {
+  /** Chỉ lấy PR được cập nhật từ mốc này */
+  since?: Date;
   /** Số PR tối đa (mặc định 300) */
   maxPRs?: number;
 }
@@ -186,6 +188,7 @@ export class GithubService {
    * [MỚI] Lấy commits của 1 repo, phân trang 100/page.
    * Trả về mảng commits theo shape GitHub API.
    */
+  
   async fetchCommits(
     owner: string,
     repo: string,
@@ -206,10 +209,16 @@ export class GithubService {
 
     for (let page = 1; page <= maxPages; page++) {
       const params: any = { per_page: perPage, page };
-      if (options.since) params.since = options.since.toISOString();
+      if (options.since) {
+        params.since = options.since.toISOString();
+      }
 
       const res = await retryWithBackoff(
-        () => client.get(`${GITHUB_API.REPO}/${owner}/${repo}/commits`, { params }),
+        () =>
+          client.get(
+            `${GITHUB_API.REPO}/${owner}/${repo}/commits`,
+            { params },
+          ),
         { retries: 3, baseDelayMs: 800 },
       );
 
@@ -224,7 +233,6 @@ export class GithubService {
       if (all.length >= maxCommits) break;
     }
 
-    // Cắt đúng maxCommits
     const trimmed = all.slice(0, maxCommits);
     this.logger.log(`Fetched ${trimmed.length} commits from ${owner}/${repo}`);
     return trimmed;
@@ -233,12 +241,16 @@ export class GithubService {
   /**
    * [MỚI] Lấy PRs (state=all) của 1 repo, phân trang 100/page.
    */
+  
   async fetchPullRequests(
     owner: string,
     repo: string,
     options: FetchPullRequestsOptions = {},
   ): Promise<any[]> {
-    const maxPRs = Math.min(options.maxPRs ?? GITHUB_PAGINATION.MAX_PRS, 5000);
+    const maxPRs = Math.min(
+      options.maxPRs ?? GITHUB_PAGINATION.MAX_PRS,
+      5000,
+    );
     const perPage = GITHUB_PAGINATION.PER_PAGE;
     const maxPages = Math.min(
       Math.ceil(maxPRs / perPage),
@@ -264,18 +276,47 @@ export class GithubService {
       );
 
       const batch: any[] = Array.isArray(res.data) ? res.data : [];
-      all.push(...batch);
 
-      this.logger.debug(
-        `GitHub PRs ${owner}/${repo} page=${page} got=${batch.length} acc=${all.length}`,
-      );
+      if (options.since) {
+        const sinceMs = options.since.getTime();
 
-      if (batch.length < perPage) break;
+        const newerPRs = batch.filter(
+          (pr) =>
+            pr.updated_at &&
+            new Date(pr.updated_at).getTime() >= sinceMs,
+        );
+
+        all.push(...newerPRs);
+
+        const reachedOlderPR = batch.some(
+          (pr) =>
+            pr.updated_at &&
+            new Date(pr.updated_at).getTime() < sinceMs,
+        );
+
+        this.logger.debug(
+          `GitHub PRs incremental ${owner}/${repo} page=${page} new=${newerPRs.length} acc=${all.length}`,
+        );
+
+        if (reachedOlderPR || batch.length < perPage) break;
+      } else {
+        all.push(...batch);
+
+        this.logger.debug(
+          `GitHub PRs ${owner}/${repo} page=${page} got=${batch.length} acc=${all.length}`,
+        );
+
+        if (batch.length < perPage) break;
+      }
+
       if (all.length >= maxPRs) break;
     }
 
     const trimmed = all.slice(0, maxPRs);
-    this.logger.log(`Fetched ${trimmed.length} PRs from ${owner}/${repo}`);
+    this.logger.log(
+      `Fetched ${trimmed.length} PRs from ${owner}/${repo}`,
+    );
+
     return trimmed;
   }
 
@@ -535,5 +576,29 @@ export class GithubService {
       prsCount: totalPrs,
       error: lastError || undefined,
     };
+  }
+
+  /**
+   * Lấy danh sách contributors từ GitHub repository
+   */
+  async getContributors(
+    owner: string,
+    repo: string,
+  ): Promise<Array<{ login: string; contributions: number }>> {
+    const client = this.buildClient();
+    try {
+      const res = await client.get(`/repos/${owner}/${repo}/contributors`, {
+        params: { per_page: 100 },
+      });
+      return (res.data || [])
+        .filter((c: any) => c.type !== 'Bot' && !c.login?.includes('[bot]'))
+        .map((c: any) => ({
+          login: c.login,
+          contributions: c.contributions || 0,
+        }));
+    } catch (err: any) {
+      this.logger.warn(`Failed to fetch contributors for ${owner}/${repo}: ${err.message}`);
+      return [];
+    }
   }
 }

@@ -38,6 +38,7 @@ async function main() {
   ];
 
   let mentorUser: any = null;
+  let internUser: any = null;
   for (const acc of accounts) {
     const user = await prisma.user.upsert({
       where: { email: acc.email },
@@ -47,23 +48,26 @@ async function main() {
     if (user.role === Role.MENTOR) {
       mentorUser = user;
     }
+    if (user.role === Role.INTERN) {
+      internUser = user;
+    }
     console.log(`  ✅ User seeded: ${user.email} (${user.role})`);
   }
 
-  // 2. Seed a sample group if none exist
-  const existingGroup = await prisma.group.findFirst({
+  // 2. Seed or update sample group
+  let group = await prisma.group.findFirst({
     where: { code: 'CG-JAVA-01' },
   });
 
-  if (!existingGroup) {
-    const group = await prisma.group.create({
+  if (!group) {
+    group = await prisma.group.create({
       data: {
         code: 'CG-JAVA-01',
         name: 'Nhóm Thực Tập Java FullStack K24',
         memberCount: 10,
         mentorId: mentorUser?.id ?? null,
         jiraProjectKey: 'ITS',
-        jiraBaseUrl: 'https://jira.codegym.vn',
+        jiraBaseUrl: 'https://cg-ictu.atlassian.net',
         jiraConnectionStatus: ConnectionStatus.SUCCESS,
         githubConnectionStatus: ConnectionStatus.SUCCESS,
         syncStatus: SyncStatus.SUCCESS,
@@ -80,12 +84,19 @@ async function main() {
       },
     });
     console.log(`  ✅ Group seeded: ${group.name} (${group.code})`);
+  }
 
-    // Seed 10 sample members
+  // Seed sample members and link intern
+  const existingMembers = await prisma.groupMember.findMany({
+    where: { groupId: group.id },
+  });
+
+  if (existingMembers.length === 0) {
     const memberData = Array.from({ length: 10 }).map((_, idx) => ({
       groupId: group.id,
+      userId: idx === 0 ? internUser?.id : null,
       memberCode: `CG2400${idx + 1}`,
-      fullName: `Học Viên CodeGym ${idx + 1}`,
+      fullName: idx === 0 ? 'Lê Văn Thực Tập Sinh' : `Học Viên CodeGym ${idx + 1}`,
       role: idx === 0 ? 'Team Leader' : 'Developer',
     }));
 
@@ -93,6 +104,12 @@ async function main() {
       data: memberData,
     });
     console.log(`  ✅ 10 sample members created for group ${group.code}`);
+  } else if (internUser) {
+    await prisma.groupMember.update({
+      where: { id: existingMembers[0].id },
+      data: { userId: internUser.id, fullName: 'Lê Văn Thực Tập Sinh' },
+    });
+    console.log(`  ✅ Linked intern user to member ${existingMembers[0].memberCode}`);
   }
 
   console.log('🎉 Seeding completed successfully!');

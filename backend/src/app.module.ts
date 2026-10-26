@@ -1,3 +1,5 @@
+import { AlertsModule } from './modules/alerts/alerts.module';
+import { SprintModule } from './modules/sprint/sprint.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -12,6 +14,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -24,8 +27,11 @@ import { AppService } from './app.service';
     SyncModule,
     MetricsModule,
     DashboardModule,
+    SprintModule,
+    AlertsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule {}
+

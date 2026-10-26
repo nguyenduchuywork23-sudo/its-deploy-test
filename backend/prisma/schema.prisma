@@ -66,6 +66,8 @@ model Group {
   githubErrorMessage    String?          @db.Text
   syncStatus            SyncStatus       @default(NEVER_SYNCED)
   lastSyncAt            DateTime?
+  githubLastSyncAt      DateTime?
+  jiraLastSyncAt        DateTime?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 

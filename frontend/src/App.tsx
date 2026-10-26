@@ -7,6 +7,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { GroupListPage } from './pages/GroupListPage';
 import { GroupDetailPage } from './pages/GroupDetailPage';
 import { MentorDashboardPage } from './pages/MentorDashboardPage';
+import { AlertsPage } from './pages/AlertsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 export default function App() {
@@ -35,6 +36,17 @@ export default function App() {
             <ProtectedRoute>
               <AppLayout>
                 <MentorDashboardPage />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/alerts"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <AlertsPage />
               </AppLayout>
             </ProtectedRoute>
           }

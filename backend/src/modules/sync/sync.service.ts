@@ -17,6 +17,9 @@ export interface SyncGroupResult {
   overallStatus: 'SUCCESS' | 'ERROR' | 'PARTIAL';
 }
 
+/** Lùi watermark 5 phút để tránh sót dữ liệu do lệch đồng hồ / độ trễ API */
+const WATERMARK_OFFSET_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class SyncService {
   private readonly logger = new Logger(SyncService.name);
@@ -52,32 +55,39 @@ export class SyncService {
       data: { syncStatus: overallStatus, lastSyncAt: new Date() },
     });
 
+    // Tự động quét và bổ sung thành viên từ Jira & GitHub sau khi sync
+    try {
+      await this.autoDiscoverMembers(groupId, group);
+    } catch (e: any) {
+      this.logger.warn(`AutoDiscover members skipped for ${groupId}: ${e.message}`);
+    }
+
     return { groupId, jira: jiraRes, github: githubRes, overallStatus };
   }
 
   /**
-   * Sync riêng Jira kèm ghi nhận SyncLog và cập nhật lastSyncAt (US-10 hỗ trợ incremental)
+   * Sync riêng Jira kèm ghi nhận SyncLog và cập nhật watermark riêng (US-10)
    */
   async syncGroupJira(groupId: string, options?: { incremental?: boolean }): Promise<SourceResult> {
     const res = await this.runSyncWithLog(groupId, 'JIRA', () => this.syncJira(groupId, options));
     if (res.ok) {
       await this.prisma.group.update({
         where: { id: groupId },
-        data: { lastSyncAt: new Date() },
+        data: { jiraLastSyncAt: new Date() }, // ← watermark riêng
       });
     }
     return res;
   }
 
   /**
-   * Sync riêng GitHub kèm ghi nhận SyncLog và cập nhật lastSyncAt (US-10 hỗ trợ incremental)
+   * Sync riêng GitHub kèm ghi nhận SyncLog và cập nhật watermark riêng (US-10)
    */
   async syncGroupGithub(groupId: string, options?: { incremental?: boolean }): Promise<SourceResult> {
     const res = await this.runSyncWithLog(groupId, 'GITHUB', () => this.syncGithub(groupId, options));
     if (res.ok) {
       await this.prisma.group.update({
         where: { id: groupId },
-        data: { lastSyncAt: new Date() },
+        data: { githubLastSyncAt: new Date() }, // ← watermark riêng
       });
     }
     return res;
@@ -141,15 +151,12 @@ export class SyncService {
     const baseUrl = group.jiraBaseUrl ?? process.env.JIRA_BASE_URL;
     if (!baseUrl) throw new Error('Thiếu JIRA_BASE_URL');
 
+    // US-10: dùng watermark riêng, fallback về lastSyncAt chung nếu chưa có
     let since: Date | undefined;
     if (options?.incremental) {
-      const latest = await this.prisma.jiraIssue.findFirst({
-        where: { groupId },
-        orderBy: { updatedAt: 'desc' },
-        select: { updatedAt: true },
-      });
-      if (latest?.updatedAt) {
-        since = new Date(latest.updatedAt.getTime() - 5 * 60 * 1000);
+      const watermark = group.jiraLastSyncAt ?? group.lastSyncAt;
+      if (watermark) {
+        since = new Date(watermark.getTime() - WATERMARK_OFFSET_MS); // lùi 5 phút
       }
     }
 
@@ -163,6 +170,15 @@ export class SyncService {
 
     for (const it of issues) {
       const f = it.fields ?? {};
+this.logger.debug(
+  `[SPRINT DEBUG] ${it.key}: ${JSON.stringify({
+    sprint: f.sprint,
+    customfield_10020: f.customfield_10020,
+    sprintFields: Object.keys(f).filter((key) =>
+      key.toLowerCase().includes('sprint'),
+    ),
+  })}`,
+);
       const issueData = {
         groupId,
         issueKey: it.key,
@@ -234,23 +250,20 @@ export class SyncService {
       throw new Error('Nhóm chưa cấu hình GitHub repository');
     }
 
+    // US-10: watermark chung cho toàn bộ GitHub của nhóm
+    let since: Date | undefined;
+    if (options?.incremental) {
+      const watermark = group.githubLastSyncAt ?? group.lastSyncAt;
+      if (watermark) {
+        since = new Date(watermark.getTime() - WATERMARK_OFFSET_MS);
+      }
+    }
+
     let processed = 0;
     const errors: string[] = [];
 
     for (const repo of group.repositories) {
       try {
-        let since: Date | undefined;
-        if (options?.incremental) {
-          const latest = await this.prisma.githubCommit.findFirst({
-            where: { groupId, repositoryId: repo.id },
-            orderBy: { committedAt: 'desc' },
-            select: { committedAt: true },
-          });
-          if (latest?.committedAt) {
-            since = new Date(latest.committedAt.getTime() - 5 * 60 * 1000);
-          }
-        }
-
         // --- Commits ---
         const commits = await this.github.fetchCommits(repo.repoOwner, repo.repoName, { since });
         for (const c of commits) {
@@ -288,9 +301,10 @@ export class SyncService {
 
         // --- Pull Requests ---
         const prs = await this.github.fetchPullRequests(
-          repo.repoOwner,
-          repo.repoName,
-        );
+  repo.repoOwner,
+  repo.repoName,
+  { since },
+);
         for (const pr of prs) {
           if (!pr.number) continue;
 
@@ -328,9 +342,11 @@ export class SyncService {
         errors.push(msg);
       }
     }
-
-    if (errors.length === group.repositories.length && group.repositories.length > 0) {
-      throw new Error(`Đồng bộ thất bại cho tất cả repo: ${errors.join('; ')}`);
+ 
+    if (errors.length > 0) {
+      throw new Error(
+        `Đồng bộ thất bại hoặc chưa hoàn tất ở ${errors.length}/${group.repositories.length} repo: ${errors.join('; ')}`,
+      );
     }
 
     return processed;
@@ -355,5 +371,112 @@ export class SyncService {
         ? fields.customfield_10020[fields.customfield_10020.length - 1]
         : fields.customfield_10020);
     return s?.name ?? null;
+  }
+
+  /**
+   * Tự động nhận diện thành viên dự án từ Jira và GitHub sau mỗi phiên Sync
+   */
+  async autoDiscoverMembers(groupId: string, group: any): Promise<number> {
+    const discoveredNames = new Set<string>();
+
+    // 1. Quét Jira Assignable Users
+    if (group.jiraProjectKey) {
+      try {
+        const jiraUsers = await this.jira.getAssignableUsers(
+          group.jiraProjectKey,
+          group.jiraBaseUrl || undefined,
+        );
+        for (const u of jiraUsers) {
+          if (u.displayName && u.displayName.trim().length > 1) {
+            discoveredNames.add(u.displayName.trim());
+          }
+        }
+      } catch (err: any) {
+        // ignore Jira fetch error
+      }
+    }
+
+    // 2. Quét Git Commit Authors
+    const commitAuthors = await this.prisma.githubCommit.findMany({
+      where: { groupId },
+      select: { author: true },
+      distinct: ['author'],
+    });
+    for (const c of commitAuthors) {
+      if (
+        c.author &&
+        c.author.trim().length > 1 &&
+        !c.author.includes('[bot]') &&
+        !c.author.toLowerCase().includes('github-actions')
+      ) {
+        discoveredNames.add(c.author.trim());
+      }
+    }
+
+    if (discoveredNames.size === 0) return 0;
+
+    const currentMembers = await this.prisma.groupMember.findMany({ where: { groupId } });
+    const existingNames = new Set(
+      currentMembers.map((m) => (m.fullName || '').toLowerCase().trim()),
+    );
+
+    const defaultSampleNames = [
+      'nguyễn văn an',
+      'trần thị bích',
+      'lê hoàng cường',
+      'phạm minh đức',
+      'hoàng thị giang',
+      'đỗ quốc hùng',
+      'vũ thuỳ linh',
+      'bùi quang nam',
+      'ngô hải phong',
+      'đặng quỳnh trang',
+    ];
+    const isAllSample =
+      currentMembers.length > 0 &&
+      currentMembers.every(
+        (m) =>
+          (m.fullName || '').startsWith('Sinh viên mẫu') ||
+          defaultSampleNames.includes((m.fullName || '').toLowerCase().trim()),
+      );
+
+    if (isAllSample) {
+      await this.prisma.groupMember.deleteMany({ where: { groupId } });
+      existingNames.clear();
+    }
+
+    const prefix = group.code ? group.code.toUpperCase().replace(/[^A-Z0-9]/g, '') : 'GRP';
+    let addedCount = 0;
+    let nextIndex = isAllSample ? 1 : currentMembers.length + 1;
+
+    for (const name of discoveredNames) {
+      if (!existingNames.has(name.toLowerCase())) {
+        const isLeader = nextIndex === 1;
+        await this.prisma.groupMember.create({
+          data: {
+            groupId,
+            memberCode: `${prefix}${String(nextIndex).padStart(2, '0')}`,
+            fullName: name,
+            role: isLeader ? 'Nhóm trưởng (Jira/Git)' : 'Lập trình viên (Jira/Git)',
+          },
+        });
+        existingNames.add(name.toLowerCase());
+        addedCount++;
+        nextIndex++;
+      }
+    }
+
+    if (addedCount > 0 || isAllSample) {
+      const totalCount = await this.prisma.groupMember.count({ where: { groupId } });
+      await this.prisma.group.update({
+        where: { id: groupId },
+        data: { memberCount: totalCount },
+      });
+      this.logger.log(
+        `[AutoDiscover] Đã tự động tích hợp ${addedCount} thành viên từ Jira/Git cho nhóm ${group.code}`,
+      );
+    }
+
+    return addedCount;
   }
 }

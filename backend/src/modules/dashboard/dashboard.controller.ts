@@ -4,9 +4,13 @@ import {
   Get,
   Param,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
+@UseGuards(OptionalJwtAuthGuard)
 @Controller('dashboard')
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
@@ -16,8 +20,11 @@ export class DashboardController {
    * GET /api/dashboard?date=2026-10-07
    */
   @Get()
-  async getDashboard(@Query('date') date?: string) {
-    return this.dashboard.getDashboard(date);
+  async getDashboard(
+    @Query('date') date?: string,
+    @CurrentUser() user?: any,
+  ) {
+    return this.dashboard.getDashboard(date, user);
   }
 
   /**
@@ -28,7 +35,8 @@ export class DashboardController {
   async getGroupActivity(
     @Param('id') id: string,
     @Query('date') date?: string,
+    @CurrentUser() user?: any,
   ) {
-    return this.dashboard.getGroupActivity(id, date);
+    return this.dashboard.getGroupActivity(id, date, user);
   }
 }

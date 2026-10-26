@@ -29,6 +29,11 @@ export class GroupsController {
     return this.groups.import(file);
   }
 
+  @Get('mentors/list')
+  getMentors() {
+    return this.groups.getMentors();
+  }
+
   @Get()
   list(
     @CurrentUser() user: any,
@@ -129,5 +134,10 @@ export class GroupsController {
   @Post(':id/members/init-sample')
   initSampleMembers(@Param('id') id: string, @CurrentUser() user: any) {
     return this.groups.initSampleMembers(id, user);
+  }
+
+  @Post(':id/members/sync-sources')
+  syncMembersFromSources(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.groups.syncMembersFromSources(id, user);
   }
 }

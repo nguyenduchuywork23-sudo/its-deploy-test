@@ -51,10 +51,19 @@ export interface Group {
   githubErrorMessage: string | null;
   syncStatus: SyncStatus;
   lastSyncAt: string | null;
+  jiraLastSyncAt: string | null;
+  githubLastSyncAt: string | null;
   createdAt: string;
   updatedAt: string;
   repositories: GithubRepository[];
   members?: GroupMember[];
+  mentorId?: string | null;
+  mentor?: {
+    id: string;
+    email: string;
+    fullName: string | null;
+    role: Role;
+  } | null;
   _count?: {
     jiraIssues?: number;
     commits?: number;
@@ -269,6 +278,61 @@ export interface GroupActivity {
     mergedAt: string | null;
     url: string;
   }>;
+}
+
+// ============================================================
+// US-17: Sprint Overview (JIRA-517)
+// ============================================================
+
+export interface SprintBreakdown {
+  total: number;
+  done: number;
+  inProgress: number;
+  toDo: number;
+  blocked: number;
+}
+
+export interface SprintOverview {
+  groupId: string;
+  groupCode: string;
+  groupName: string;
+  sprint: string | null;
+  breakdown: SprintBreakdown;
+  completionRate: number;
+  lastUpdatedAt: string | null;
+}
+
+// ============================================================
+// US-18: Alerts (JIRA-509)
+// ============================================================
+
+export type AlertType = 'SYNC_ERROR' | 'BLOCKED' | 'STALE_ISSUE' | 'NO_ACTIVITY';
+
+export interface AlertItem {
+  groupId: string;
+  groupCode: string;
+  groupName: string;
+  types: AlertType[];
+  details: {
+    syncError?: { source: string; message: string };
+    blockedCount?: number;
+    staleCount?: number;
+    noActivitySince?: string;
+  };
+}
+
+export interface AlertsSummary {
+  total: number;
+  syncError: number;
+  blocked: number;
+  staleIssue: number;
+  noActivity: number;
+}
+
+export interface AlertsResult {
+  date: string;
+  summary: AlertsSummary;
+  items: AlertItem[];
 }
 
 

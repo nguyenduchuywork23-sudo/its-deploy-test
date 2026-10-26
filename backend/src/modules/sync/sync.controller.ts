@@ -23,8 +23,24 @@ export class SyncController {
 
   private checkSyncPermission(user: any) {
     if (user && user.role === Role.INTERN) {
-      throw new ForbiddenException('Thực tập sinh chỉ có quyền xem dữ liệu, không thể kích hoạt đồng bộ');
+      throw new ForbiddenException(
+        'Thực tập sinh chỉ có quyền xem dữ liệu, không thể kích hoạt đồng bộ',
+      );
     }
+  }
+
+  /**
+   * Helper: parse incremental từ cả `?full=` và `?incremental=`
+   * - full=true  → incremental=false
+   * - full=false → incremental=true
+   * - incremental=true  → incremental=true (ưu tiên incremental nếu không có full)
+   * - Mặc định: incremental=true
+   */
+  private parseIncremental(full?: string, incremental?: string): boolean {
+    if (full === 'true') return false;   // full=true → KHÔNG incremental
+    if (full === 'false') return true;   // full=false → incremental
+    if (incremental === 'false') return false;
+    return true; // mặc định incremental
   }
 
   /**
@@ -34,16 +50,14 @@ export class SyncController {
   @Post('all')
   syncAllGroups(
     @CurrentUser() user: any,
+    @Query('full') full?: string,
     @Query('incremental') incremental?: string,
   ) {
     this.checkSyncPermission(user);
-    const isIncremental = incremental !== 'false';
+    const isIncremental = this.parseIncremental(full, incremental);
     return this.syncScheduler.syncAllGroups({ incremental: isIncremental });
   }
 
-  /**
-   * Lấy trạng thái của tiến trình đồng bộ tự động.
-   */
   @Get('status')
   getSchedulerStatus() {
     return this.syncScheduler.getStatus();
@@ -56,44 +70,44 @@ export class SyncController {
   syncGroup(
     @Param('id') id: string,
     @CurrentUser() user: any,
+    @Query('full') full?: string,
     @Query('incremental') incremental?: string,
   ) {
     this.checkSyncPermission(user);
-    const isIncremental = incremental === 'true';
+    const isIncremental = this.parseIncremental(full, incremental);
     return this.sync.syncGroup(id, { incremental: isIncremental });
   }
 
   /**
-   * Chỉ sync Jira kèm ghi nhận log.
+   * Chỉ sync Jira.
    */
   @Post('group/:id/jira')
   syncJira(
     @Param('id') id: string,
     @CurrentUser() user: any,
+    @Query('full') full?: string,
     @Query('incremental') incremental?: string,
   ) {
     this.checkSyncPermission(user);
-    const isIncremental = incremental === 'true';
+    const isIncremental = this.parseIncremental(full, incremental);
     return this.sync.syncGroupJira(id, { incremental: isIncremental });
   }
 
   /**
-   * Chỉ sync GitHub kèm ghi nhận log.
+   * Chỉ sync GitHub.
    */
   @Post('group/:id/github')
   syncGithub(
     @Param('id') id: string,
     @CurrentUser() user: any,
+    @Query('full') full?: string,
     @Query('incremental') incremental?: string,
   ) {
     this.checkSyncPermission(user);
-    const isIncremental = incremental === 'true';
+    const isIncremental = this.parseIncremental(full, incremental);
     return this.sync.syncGroupGithub(id, { incremental: isIncremental });
   }
 
-  /**
-   * Lấy lịch sử sync.
-   */
   @Get('logs/:groupId')
   getLogs(
     @Param('groupId') groupId: string,

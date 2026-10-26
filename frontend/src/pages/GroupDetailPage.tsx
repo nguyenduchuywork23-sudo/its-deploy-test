@@ -18,8 +18,11 @@ import {
   updateGroupMember,
   deleteGroupMember,
   initSampleMembers,
+  syncMembersFromSources,
+  getMentors,
 } from '../api/groups';
 import { getGroupActivity, computeGroupMetric } from '../api/dashboard';
+import { getSprintOverview } from '../api/sprint';
 import { DatePicker, getTodayDateString } from '../components/dashboard/DatePicker';
 import { ConnectionBadge, SyncBadge } from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
@@ -28,7 +31,7 @@ import type { JiraIssue, GithubCommit, GithubPullRequest, SyncGroupResult, Sourc
 export function GroupDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const { isIntern } = useAuth();
+  const { isIntern, isMentor, isSysAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const dateFromQuery = searchParams.get('date');
   const [activityDate, setActivityDate] = useState<string>(dateFromQuery || getTodayDateString());
@@ -36,7 +39,14 @@ export function GroupDetailPage() {
   const [jiraBaseUrl, setJiraBaseUrl] = useState('');
   const [jiraProjectKey, setJiraProjectKey] = useState('');
   const [githubRepos, setGithubRepos] = useState<string[]>(['']);
+  const [selectedMentorId, setSelectedMentorId] = useState<string>('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+
+  const { data: mentorList = [] } = useQuery({
+    queryKey: ['mentors-list'],
+    queryFn: () => getMentors(),
+    enabled: isSysAdmin,
+  });
   const [copiedCode, setCopiedCode] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<{
     type: 'ALL' | 'JIRA' | 'GITHUB';
@@ -59,7 +69,6 @@ export function GroupDetailPage() {
     role: 'Thành viên',
   });
   const [selectedSprint, setSelectedSprint] = useState<string>('ALL');
-  const [onlyStaleFilter, setOnlyStaleFilter] = useState(false);
   const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'JIRA' | 'GITHUB'>('ALL');
 
@@ -109,6 +118,14 @@ export function GroupDetailPage() {
     enabled: !!id,
   });
 
+  // Sprint Overview Query (US-17, JIRA-517)
+  const { data: sprintData, isLoading: sprintLoading } = useQuery({
+    queryKey: ['sprint-overview', id],
+    queryFn: () => getSprintOverview(id!),
+    enabled: !!id,
+    refetchOnWindowFocus: false,
+  });
+
   // Group Members Query (US-21)
   const { data: members = [], isLoading: isLoadingMembers, refetch: refetchMembers } = useQuery({
     queryKey: ['group-members', id],
@@ -146,11 +163,34 @@ export function GroupDetailPage() {
     },
   });
 
+  const [memberSyncFeedback, setMemberSyncFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   const initSampleMembersMutation = useMutation({
     mutationFn: () => initSampleMembers(id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['group-members', id] });
       queryClient.invalidateQueries({ queryKey: ['group', id] });
+    },
+  });
+
+  const syncMembersMutation = useMutation({
+    mutationFn: () => syncMembersFromSources(id!),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['group-members', id] });
+      queryClient.invalidateQueries({ queryKey: ['group', id] });
+      queryClient.invalidateQueries({ queryKey: ['groups'] });
+      setMemberSyncFeedback({
+        type: 'success',
+        message: res.message || 'Đã tích hợp danh sách thành viên từ Jira & Git thành công!',
+      });
+      setTimeout(() => setMemberSyncFeedback(null), 6000);
+    },
+    onError: (err: any) => {
+      setMemberSyncFeedback({
+        type: 'error',
+        message: err?.response?.data?.message || err?.message || 'Lỗi khi đồng bộ thành viên từ Jira & Git',
+      });
+      setTimeout(() => setMemberSyncFeedback(null), 6000);
     },
   });
 
@@ -281,6 +321,7 @@ export function GroupDetailPage() {
     if (group) {
       setJiraBaseUrl(group.jiraBaseUrl || '');
       setJiraProjectKey(group.jiraProjectKey || '');
+      setSelectedMentorId(group.mentorId || '');
       if (group.repositories && group.repositories.length > 0) {
         setGithubRepos(group.repositories.map((r) => r.repoUrl));
       } else {
@@ -296,6 +337,7 @@ export function GroupDetailPage() {
         jiraBaseUrl: jiraBaseUrl.trim() || undefined,
         jiraProjectKey: jiraProjectKey.trim() || undefined,
         githubRepos: githubRepos.map((r) => r.trim()).filter(Boolean),
+        mentorId: isSysAdmin ? (selectedMentorId || null) : undefined,
       }),
     onSuccess: (updated) => {
       queryClient.setQueryData(['group', id], updated);
@@ -313,6 +355,7 @@ export function GroupDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['group-commits', id] });
     queryClient.invalidateQueries({ queryKey: ['group-prs', id] });
     queryClient.invalidateQueries({ queryKey: ['group-activity', id] });
+    queryClient.invalidateQueries({ queryKey: ['sprint-overview', id] });
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
   };
 
@@ -439,49 +482,10 @@ export function GroupDetailPage() {
     }
   }, [sprintList, selectedSprint]);
 
-  // Thống kê chi tiết Sprint hiện tại (US-17, US-18)
-  const sprintStats = useMemo(() => {
-    const targetIssues =
-      selectedSprint === 'ALL'
-        ? issues
-        : issues.filter((it) => it.sprint?.trim() === selectedSprint);
+  // JIRA-517: Client-side sprintStats calculation removed in favor of BE Sprint API (sprintData)
 
-    let done = 0;
-    let inProgress = 0;
-    let blocked = 0;
-    let todo = 0;
-    let stale = 0;
-    const twoDaysAgo = Date.now() - 2 * 24 * 3600 * 1000;
-
-    targetIssues.forEach((it) => {
-      const st = (it.status || '').toLowerCase();
-      const isDone = st.includes('done') || st.includes('closed') || st.includes('resolved') || st.includes('hoàn thành');
-      const isBlocked = st.includes('blocked') || st.includes('chặn') || st.includes('tắc');
-      const isInProgress = !isDone && !isBlocked && (st.includes('progress') || st.includes('review') || st.includes('đang làm'));
-
-      if (isDone) done++;
-      else if (isBlocked) blocked++;
-      else if (isInProgress) inProgress++;
-      else todo++;
-
-      // Stale issue: Chưa xong và hơn 2 ngày không cập nhật (US-18)
-      if (!isDone && it.updatedAt) {
-        const updatedTime = new Date(it.updatedAt).getTime();
-        if (updatedTime < twoDaysAgo) {
-          stale++;
-        }
-      }
-    });
-
-    const total = targetIssues.length;
-    const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
-
-    return { total, done, inProgress, blocked, todo, stale, completionRate };
-  }, [issues, selectedSprint]);
-
-  // Filtered issues có hỗ trợ lọc theo Sprint và Stale Issue
+  // Filtered issues có hỗ trợ lọc theo Sprint
   const filteredIssues = useMemo(() => {
-    const twoDaysAgo = Date.now() - 2 * 24 * 3600 * 1000;
     return issues.filter((it: JiraIssue) => {
       if (selectedSprint !== 'ALL' && it.sprint?.trim() !== selectedSprint) {
         return false;
@@ -492,12 +496,6 @@ export function GroupDetailPage() {
       const isBlocked = st.includes('blocked') || st.includes('chặn') || st.includes('tắc');
       const isInProgress = !isDone && !isBlocked && (st.includes('progress') || st.includes('review') || st.includes('đang làm'));
       const isTodo = !isDone && !isBlocked && !isInProgress;
-
-      if (onlyStaleFilter) {
-        if (isDone || !it.updatedAt || new Date(it.updatedAt).getTime() >= twoDaysAgo) {
-          return false;
-        }
-      }
 
       const query = issueSearch.toLowerCase().trim();
       const matchSearch =
@@ -514,7 +512,7 @@ export function GroupDetailPage() {
       if (issueStatusFilter === 'TODO') return isTodo;
       return true;
     });
-  }, [issues, issueSearch, issueStatusFilter, selectedSprint, onlyStaleFilter]);
+  }, [issues, issueSearch, issueStatusFilter, selectedSprint]);
 
   // Issue status counters cho toàn bộ issues
   const issueStats = useMemo(() => {
@@ -593,7 +591,13 @@ export function GroupDetailPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </div>
-          <span>Quay lại danh sách nhóm</span>
+          <span>
+            {isIntern
+              ? 'Quay lại nhóm của tôi'
+              : isMentor
+              ? 'Quay lại danh sách nhóm phụ trách'
+              : 'Quay lại danh sách nhóm'}
+          </span>
         </Link>
 
         {/* Quick status summary */}
@@ -697,11 +701,11 @@ export function GroupDetailPage() {
           {/* Sync Operations Multi-Button */}
           <div className="flex flex-col items-stretch md:items-end gap-2 shrink-0">
             {isIntern ? (
-              <div className="inline-flex items-center gap-2 px-3.5 py-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold shadow-xs">
-                <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <div className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold shadow-xs">
+                <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                <span>Chế độ Thực tập sinh (Chỉ xem)</span>
+                <span>Dữ liệu đồng bộ tự động định kỳ</span>
               </div>
             ) : (
               <div className="inline-flex rounded-xl shadow-sm border border-slate-900 overflow-hidden bg-slate-900 p-0.5">
@@ -750,9 +754,32 @@ export function GroupDetailPage() {
               </div>
             )}
 
-            <span className="text-[11px] text-slate-400 text-center md:text-right">
-              {group.lastSyncAt ? `Đồng bộ lần cuối: ${formatDate(group.lastSyncAt)}` : 'Chưa từng đồng bộ'}
-            </span>
+            <div className="text-xs text-slate-500 space-y-1 text-left md:text-right">
+              <div>
+                <span className="text-slate-400">Lần cuối (tổng): </span>
+                <span className="text-slate-700 font-medium">
+                  {group.lastSyncAt
+                    ? new Date(group.lastSyncAt).toLocaleString('vi-VN')
+                    : 'Chưa đồng bộ lần nào'}
+                </span>
+              </div>
+              {group.jiraLastSyncAt && (
+                <div>
+                  <span className="text-slate-400">Jira sync: </span>
+                  <span className="text-slate-700 font-medium">
+                    {new Date(group.jiraLastSyncAt).toLocaleString('vi-VN')}
+                  </span>
+                </div>
+              )}
+              {group.githubLastSyncAt && (
+                <div>
+                  <span className="text-slate-400">GitHub sync: </span>
+                  <span className="text-slate-700 font-medium">
+                    {new Date(group.githubLastSyncAt).toLocaleString('vi-VN')}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -824,27 +851,51 @@ export function GroupDetailPage() {
             </div>
           </div>
 
-          <div
-            onClick={() => setActiveDataTab('LOGS')}
-            className={`p-3.5 rounded-xl border cursor-pointer transition ${
-              activeDataTab === 'LOGS'
-                ? 'bg-amber-50/60 border-amber-200 ring-2 ring-amber-500/20 shadow-xs'
-                : 'bg-slate-50/60 border-slate-200/70 hover:bg-slate-100/60'
-            }`}
-          >
-            <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
-              <span>Nhật ký Sync</span>
-              <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+          {isIntern ? (
+            <div
+              onClick={() => setActiveDataTab('MEMBERS')}
+              className={`p-3.5 rounded-xl border cursor-pointer transition ${
+                activeDataTab === 'MEMBERS'
+                  ? 'bg-emerald-50/60 border-emerald-200 ring-2 ring-emerald-500/20 shadow-xs'
+                  : 'bg-slate-50/60 border-slate-200/70 hover:bg-slate-100/60'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                <span>Thành viên nhóm</span>
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-xl font-extrabold text-slate-900 font-mono">
+                  {members.length > 0 ? members.length : (group.memberCount || 10)}
+                </span>
+                <span className="text-[11px] text-slate-400">sinh viên</span>
+              </div>
             </div>
-            <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-xl font-extrabold text-slate-900 font-mono">
-                {syncLogs.length}
-              </span>
-              <span className="text-[11px] text-slate-400">phiên</span>
+          ) : (
+            <div
+              onClick={() => setActiveDataTab('LOGS')}
+              className={`p-3.5 rounded-xl border cursor-pointer transition ${
+                activeDataTab === 'LOGS'
+                  ? 'bg-amber-50/60 border-amber-200 ring-2 ring-amber-500/20 shadow-xs'
+                  : 'bg-slate-50/60 border-slate-200/70 hover:bg-slate-100/60'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                <span>Nhật ký Sync</span>
+                <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-1.5">
+                <span className="text-xl font-extrabold text-slate-900 font-mono">
+                  {syncLogs.length}
+                </span>
+                <span className="text-[11px] text-slate-400">phiên</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -925,10 +976,53 @@ export function GroupDetailPage() {
         </div>
       )}
 
-      {/* Main Configuration Form */}
-      <form onSubmit={handleSaveSubmit} className="space-y-6">
-        {/* Section 1: Jira Cloud */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 md:p-7 shadow-xs space-y-5">
+      {/* Main Configuration Form - Only for Mentors, Lead Mentors, SysAdmin */}
+      {!isIntern && (
+        <form onSubmit={handleSaveSubmit} className="space-y-6">
+          {/* Section 0: Phân công Mentor (Chỉ dành riêng cho SysAdmin) */}
+          {isSysAdmin && (
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 md:p-7 shadow-xs space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
+                <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shrink-0">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 tracking-tight">Phân công Mentor phụ trách</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Dành riêng cho Quản trị viên hệ thống (SysAdmin): Gán hoặc đổi Giảng viên / Mentor hướng dẫn nhóm này
+                  </p>
+                </div>
+              </div>
+
+              <div className="max-w-md">
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Giảng viên / Mentor phụ trách
+                </label>
+                <select
+                  value={selectedMentorId}
+                  onChange={(e) => setSelectedMentorId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300/80 rounded-xl text-xs text-slate-900 focus:bg-white focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition font-medium"
+                >
+                  <option value="">-- Chưa phân công Mentor --</option>
+                  {mentorList.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.fullName} ({m.email}) - {m.role === 'LEAD_MENTOR' ? 'Lead Mentor' : 'Mentor'}
+                    </option>
+                  ))}
+                </select>
+                {group.mentor && (
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    Hiện đang phân công: <span className="font-semibold text-slate-800">{group.mentor.fullName}</span> ({group.mentor.email})
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Section 1: Jira Cloud */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 md:p-7 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100 shrink-0">
@@ -1184,6 +1278,7 @@ export function GroupDetailPage() {
           )}
         </div>
       </form>
+      )}
 
       {/* Synced Data Explorer with Tabs */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 md:p-7 shadow-xs space-y-5">
@@ -1260,20 +1355,22 @@ export function GroupDetailPage() {
               </span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveDataTab('LOGS')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
-                activeDataTab === 'LOGS' ? 'bg-white text-amber-700 shadow-xs font-bold' : 'hover:text-slate-900'
-              }`}
-            >
-              <span>Sync Logs</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                activeDataTab === 'LOGS' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-              }`}>
-                {syncLogs.length}
-              </span>
-            </button>
+            {!isIntern && (
+              <button
+                type="button"
+                onClick={() => setActiveDataTab('LOGS')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
+                  activeDataTab === 'LOGS' ? 'bg-white text-amber-700 shadow-xs font-bold' : 'hover:text-slate-900'
+                }`}
+              >
+                <span>Sync Logs</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  activeDataTab === 'LOGS' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {syncLogs.length}
+                </span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1301,6 +1398,34 @@ export function GroupDetailPage() {
         {/* TAB CONTENT 0: HOẠT ĐỘNG THEO NGÀY (US-14, US-15, US-16) */}
         {activeDataTab === 'DAILY_ACTIVITY' && (
           <div className="space-y-6">
+            {/* Watermark sync overview banner (JIRA-519) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white border border-slate-200/80 rounded-2xl text-xs">
+              <div>
+                <div className="text-slate-400">Lần cuối</div>
+                <div className="text-slate-700 font-medium mt-0.5">
+                  {group.lastSyncAt
+                    ? new Date(group.lastSyncAt).toLocaleString('vi-VN')
+                    : '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-400">Jira sync</div>
+                <div className="text-slate-700 font-medium mt-0.5">
+                  {group.jiraLastSyncAt
+                    ? new Date(group.jiraLastSyncAt).toLocaleString('vi-VN')
+                    : '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-400">GitHub sync</div>
+                <div className="text-slate-700 font-medium mt-0.5">
+                  {group.githubLastSyncAt
+                    ? new Date(group.githubLastSyncAt).toLocaleString('vi-VN')
+                    : '—'}
+                </div>
+              </div>
+            </div>
+
             {/* Top Toolbar: Date Picker + Quick Actions */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 border border-slate-200/80 rounded-2xl p-4">
               <div className="flex items-center gap-3 flex-wrap">
@@ -1788,192 +1913,159 @@ export function GroupDetailPage() {
         {/* TAB CONTENT 1: JIRA ISSUES */}
         {activeDataTab === 'ISSUES' && (
           <div className="space-y-4">
-            {/* Widget Tổng quan Sprint (US-17) & Cảnh báo Stale Issues (US-18) */}
-            <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 border border-slate-200/90 rounded-2xl p-4 sm:p-5 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/70">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-xs shadow-xs">
-                    SP
+            {/* Widget Tổng quan Sprint (US-17, JIRA-517) */}
+            {sprintLoading ? (
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-6 text-center text-slate-500 text-sm">
+                Đang tải Sprint...
+              </div>
+            ) : (
+              <div className="bg-gradient-to-br from-slate-50 to-blue-50/30 border border-slate-200/90 rounded-2xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/70">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-xs shadow-xs">
+                      SP
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                        <span>Tổng quan Sprint Backlog</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-mono font-bold">
+                          US-17
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Theo dõi tiến độ, số lượng issue và tỷ lệ hoàn thành Sprint từ Jira
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      <span>Tổng quan Sprint Backlog</span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-mono font-bold">
-                        US-17
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-500">Sprint:</span>
+                    <div className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-2xs">
+                      {sprintData?.sprint ?? 'Chưa có Sprint'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress Bar & KPI Numbers */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-800">
+                        {sprintData?.sprint ?? 'Chưa có Sprint'}
                       </span>
-                    </h3>
-                    <p className="text-[11px] text-slate-500">
-                      Theo dõi tiến độ, số lượng issue và tỷ lệ hoàn thành theo từng Sprint
-                    </p>
-                  </div>
-                </div>
-
-                {/* Sprint Selector Dropdown */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Sprint:</label>
-                  <select
-                    value={selectedSprint}
-                    onChange={(e) => setSelectedSprint(e.target.value)}
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-2xs"
-                  >
-                    <option value="ALL">Toàn bộ Issues ({issues.length})</option>
-                    {sprintList.map((sp) => (
-                      <option key={sp} value={sp}>
-                        {sp}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Progress Bar & KPI Numbers */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-800">
-                      {selectedSprint === 'ALL' ? 'Toàn bộ dự án' : selectedSprint}
-                    </span>
-                    <span className="text-slate-400">•</span>
-                    <span className="text-slate-500 font-mono font-semibold">
-                      {sprintStats.done}/{sprintStats.total} hoàn thành
+                      <span className="text-slate-400">•</span>
+                      <span className="text-slate-500 font-mono font-semibold">
+                        {sprintData?.breakdown.done ?? 0}/{sprintData?.breakdown.total ?? 0} hoàn thành
+                      </span>
+                    </div>
+                    <span className="font-mono font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-200">
+                      {sprintData?.completionRate ?? 0}% Done
                     </span>
                   </div>
-                  <span className="font-mono font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-200">
-                    {sprintStats.completionRate}% Done
-                  </span>
+
+                  {/* Multi-segment Progress Bar */}
+                  <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex shadow-inner">
+                    {(sprintData?.breakdown.total ?? 0) > 0 ? (
+                      <>
+                        <div
+                          style={{ width: `${((sprintData?.breakdown.done ?? 0) / (sprintData?.breakdown.total ?? 1)) * 100}%` }}
+                          className="bg-emerald-500 transition-all duration-500"
+                          title={`Done: ${sprintData?.breakdown.done ?? 0} issues`}
+                        />
+                        <div
+                          style={{ width: `${((sprintData?.breakdown.inProgress ?? 0) / (sprintData?.breakdown.total ?? 1)) * 100}%` }}
+                          className="bg-amber-400 transition-all duration-500"
+                          title={`In Progress: ${sprintData?.breakdown.inProgress ?? 0} issues`}
+                        />
+                        <div
+                          style={{ width: `${((sprintData?.breakdown.blocked ?? 0) / (sprintData?.breakdown.total ?? 1)) * 100}%` }}
+                          className="bg-rose-500 transition-all duration-500"
+                          title={`Blocked: ${sprintData?.breakdown.blocked ?? 0} issues`}
+                        />
+                        <div
+                          style={{ width: `${((sprintData?.breakdown.toDo ?? 0) / (sprintData?.breakdown.total ?? 1)) * 100}%` }}
+                          className="bg-slate-300 transition-all duration-500"
+                          title={`To Do: ${sprintData?.breakdown.toDo ?? 0} issues`}
+                        />
+                      </>
+                    ) : (
+                      <div className="w-full bg-slate-200" />
+                    )}
+                  </div>
                 </div>
 
-                {/* Multi-segment Progress Bar */}
-                <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex shadow-inner">
-                  {sprintStats.total > 0 ? (
-                    <>
-                      <div
-                        style={{ width: `${(sprintStats.done / sprintStats.total) * 100}%` }}
-                        className="bg-emerald-500 transition-all duration-500"
-                        title={`Done: ${sprintStats.done} issues`}
-                      />
-                      <div
-                        style={{ width: `${(sprintStats.inProgress / sprintStats.total) * 100}%` }}
-                        className="bg-amber-400 transition-all duration-500"
-                        title={`In Progress: ${sprintStats.inProgress} issues`}
-                      />
-                      <div
-                        style={{ width: `${(sprintStats.blocked / sprintStats.total) * 100}%` }}
-                        className="bg-rose-500 transition-all duration-500"
-                        title={`Blocked: ${sprintStats.blocked} issues`}
-                      />
-                      <div
-                        style={{ width: `${(sprintStats.todo / sprintStats.total) * 100}%` }}
-                        className="bg-slate-300 transition-all duration-500"
-                        title={`To Do: ${sprintStats.todo} issues`}
-                      />
-                    </>
-                  ) : (
-                    <div className="w-full bg-slate-200" />
-                  )}
-                </div>
-              </div>
-
-              {/* 4 Status Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIssueStatusFilter(issueStatusFilter === 'DONE' ? 'ALL' : 'DONE');
-                    setOnlyStaleFilter(false);
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition ${
-                    issueStatusFilter === 'DONE' && !onlyStaleFilter
-                      ? 'bg-emerald-100/70 border-emerald-300 ring-2 ring-emerald-400'
-                      : 'bg-white border-slate-200/80 hover:bg-emerald-50/40'
-                  }`}
-                >
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span>Done</span>
-                  </div>
-                  <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintStats.done}</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIssueStatusFilter(issueStatusFilter === 'IN_PROGRESS' ? 'ALL' : 'IN_PROGRESS');
-                    setOnlyStaleFilter(false);
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition ${
-                    issueStatusFilter === 'IN_PROGRESS' && !onlyStaleFilter
-                      ? 'bg-amber-100/70 border-amber-300 ring-2 ring-amber-400'
-                      : 'bg-white border-slate-200/80 hover:bg-amber-50/40'
-                  }`}
-                >
-                  <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-amber-400" />
-                    <span>In Progress</span>
-                  </div>
-                  <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintStats.inProgress}</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIssueStatusFilter('ALL');
-                    setOnlyStaleFilter(false);
-                  }}
-                  className="p-2.5 rounded-xl border text-left bg-white border-slate-200/80 hover:bg-rose-50/40 transition"
-                >
-                  <div className="text-[10px] font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-rose-500" />
-                    <span>Blocked</span>
-                  </div>
-                  <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintStats.blocked}</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIssueStatusFilter(issueStatusFilter === 'TODO' ? 'ALL' : 'TODO');
-                    setOnlyStaleFilter(false);
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition ${
-                    issueStatusFilter === 'TODO' && !onlyStaleFilter
-                      ? 'bg-slate-200 border-slate-400 ring-2 ring-slate-400'
-                      : 'bg-white border-slate-200/80 hover:bg-slate-100'
-                  }`}
-                >
-                  <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-slate-400" />
-                    <span>To Do</span>
-                  </div>
-                  <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintStats.todo}</div>
-                </button>
-              </div>
-
-              {/* Cảnh báo Stale Issues (US-18) */}
-              {sprintStats.stale > 0 && (
-                <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200/90 rounded-xl text-xs text-amber-800 gap-3">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    <span>
-                      Phát hiện <strong>{sprintStats.stale} issue</strong> chưa hoàn thành và không có cập nhật trong hơn 2 ngày qua (Stale Issues).
-                    </span>
-                  </div>
+                {/* 4 Status Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
                   <button
                     type="button"
-                    onClick={() => setOnlyStaleFilter(!onlyStaleFilter)}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
-                      onlyStaleFilter
-                        ? 'bg-amber-700 text-white'
-                        : 'bg-white text-amber-800 border border-amber-300 hover:bg-amber-100'
+                    onClick={() => {
+                      setIssueStatusFilter(issueStatusFilter === 'DONE' ? 'ALL' : 'DONE');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      issueStatusFilter === 'DONE'
+                        ? 'bg-emerald-100/70 border-emerald-300 ring-2 ring-emerald-400'
+                        : 'bg-white border-slate-200/80 hover:bg-emerald-50/40'
                     }`}
                   >
-                    {onlyStaleFilter ? 'Đang lọc Stale' : 'Lọc Stale Issues'}
+                    <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <span>Done</span>
+                    </div>
+                    <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintData?.breakdown.done ?? 0}</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssueStatusFilter(issueStatusFilter === 'IN_PROGRESS' ? 'ALL' : 'IN_PROGRESS');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      issueStatusFilter === 'IN_PROGRESS'
+                        ? 'bg-amber-100/70 border-amber-300 ring-2 ring-amber-400'
+                        : 'bg-white border-slate-200/80 hover:bg-amber-50/40'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      <span>In Progress</span>
+                    </div>
+                    <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintData?.breakdown.inProgress ?? 0}</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssueStatusFilter('ALL');
+                    }}
+                    className="p-2.5 rounded-xl border text-left bg-white border-slate-200/80 hover:bg-rose-50/40 transition"
+                  >
+                    <div className="text-[10px] font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-rose-500" />
+                      <span>Blocked</span>
+                    </div>
+                    <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintData?.breakdown.blocked ?? 0}</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssueStatusFilter(issueStatusFilter === 'TODO' ? 'ALL' : 'TODO');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      issueStatusFilter === 'TODO'
+                        ? 'bg-slate-200 border-slate-400 ring-2 ring-slate-400'
+                        : 'bg-white border-slate-200/80 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-slate-400" />
+                      <span>To Do</span>
+                    </div>
+                    <div className="text-lg font-black text-slate-900 mt-0.5 font-mono">{sprintData?.breakdown.toDo ?? 0}</div>
                   </button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
             {/* Filter and search bar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="relative w-full sm:w-72">
@@ -2480,29 +2572,54 @@ export function GroupDetailPage() {
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                       <span>Danh sách thành viên nhóm sinh viên</span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-mono font-bold">
-                        US-21
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-mono font-bold">
+                        Jira + GitHub
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500">
-                      Hiển thị danh sách 10 thành viên của nhóm để Mentor đối chiếu thông tin quản lý (mã SV, họ tên, vai trò)
+                      Tự động trích xuất lập trình viên thực tế từ commit GitHub & Jira assignees, hoặc thêm/chỉnh sửa thủ công
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
+                  {!isIntern && (
+                    <button
+                      type="button"
+                      onClick={() => syncMembersMutation.mutate()}
+                      disabled={syncMembersMutation.isPending}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition disabled:opacity-50 shadow-2xs cursor-pointer"
+                      title="Tự động quét và lấy danh sách thành viên/lập trình viên thực tế từ Jira issues và GitHub commits"
+                    >
+                      <svg
+                        className={`w-3.5 h-3.5 ${syncMembersMutation.isPending ? 'animate-spin' : ''}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                      <span>{syncMembersMutation.isPending ? 'Đang tích hợp...' : 'Tự động lấy từ Jira & Git'}</span>
+                    </button>
+                  )}
+
                   {members.length < 10 && !isIntern && (
                     <button
                       type="button"
                       onClick={() => initSampleMembersMutation.mutate()}
                       disabled={initSampleMembersMutation.isPending}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-xl transition disabled:opacity-50"
-                      title="Tự động khởi tạo đủ 10 thành viên sinh viên mẫu cho nhóm"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl transition disabled:opacity-50"
+                      title="Khởi tạo danh sách thành viên sinh viên mẫu cho nhóm"
                     >
                       <svg className={`w-3.5 h-3.5 ${initSampleMembersMutation.isPending ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                       </svg>
-                      <span>{initSampleMembersMutation.isPending ? 'Đang tạo...' : 'Khởi tạo đủ 10 thành viên'}</span>
+                      <span>{initSampleMembersMutation.isPending ? 'Đang tạo...' : 'Tạo mẫu 10 SV'}</span>
                     </button>
                   )}
 
@@ -2518,12 +2635,12 @@ export function GroupDetailPage() {
                         });
                         setIsMemberModalOpen(true);
                       }}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition shadow-2xs"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition shadow-2xs cursor-pointer"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                       </svg>
-                      <span>Thêm thành viên</span>
+                      <span>Thêm thủ công</span>
                     </button>
                   )}
 
@@ -2540,6 +2657,37 @@ export function GroupDetailPage() {
                   </button>
                 </div>
               </div>
+
+              {/* Feedback Alert if auto sync run */}
+              {memberSyncFeedback && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-medium flex items-center justify-between transition ${
+                    memberSyncFeedback.type === 'success'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {memberSyncFeedback.type === 'success' ? (
+                      <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4 text-rose-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    )}
+                    <span>{memberSyncFeedback.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMemberSyncFeedback(null)}
+                    className="text-slate-400 hover:text-slate-600 text-xs px-1.5 py-0.5"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
               {/* 4 Stats Badges */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2565,9 +2713,10 @@ export function GroupDetailPage() {
                 </div>
 
                 <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Tiêu chuẩn AC</div>
-                  <div className="text-[11px] font-semibold text-emerald-800 mt-1">
-                    Độc lập với Jira/Git
+                  <div className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Nguồn dữ liệu</div>
+                  <div className="text-[11px] font-semibold text-indigo-800 mt-1 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse"></span>
+                    <span>Tích hợp Jira & GitHub</span>
                   </div>
                 </div>
               </div>
@@ -2598,24 +2747,37 @@ export function GroupDetailPage() {
               <div className="py-8 text-center text-xs text-slate-400">Đang tải danh sách thành viên...</div>
             ) : filteredMembers.length === 0 ? (
               <div className="py-10 text-center space-y-3 bg-slate-50/50 rounded-2xl border border-dashed border-slate-300 p-8">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
                   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                   </svg>
                 </div>
                 <p className="text-xs font-bold text-slate-800">Chưa có thành viên nào trong danh sách</p>
                 <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
-                  Nhóm hiện chưa được nhập danh sách thành viên cụ thể. Bạn có thể nhấn nút <strong>"Khởi tạo đủ 10 thành viên"</strong> để tự động tạo danh sách theo chỉ tiêu.
+                  Nhóm hiện chưa có thành viên. Bạn có thể nhấn nút <strong>"Tự động lấy từ Jira & Git"</strong> để quét danh sách tác giả commit và assignees thực tế, hoặc thêm thủ công.
                 </p>
                 {!isIntern && (
-                  <button
-                    type="button"
-                    onClick={() => initSampleMembersMutation.mutate()}
-                    disabled={initSampleMembersMutation.isPending}
-                    className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition shadow-xs inline-flex items-center gap-1.5"
-                  >
-                    <span>Khởi tạo 10 thành viên mẫu ngay</span>
-                  </button>
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => syncMembersMutation.mutate()}
+                      disabled={syncMembersMutation.isPending}
+                      className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <svg className={`w-3.5 h-3.5 ${syncMembersMutation.isPending ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span>{syncMembersMutation.isPending ? 'Đang tích hợp...' : 'Tự động lấy từ Jira & Git'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => initSampleMembersMutation.mutate()}
+                      disabled={initSampleMembersMutation.isPending}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl transition disabled:opacity-50"
+                    >
+                      <span>Khởi tạo 10 thành viên mẫu</span>
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (

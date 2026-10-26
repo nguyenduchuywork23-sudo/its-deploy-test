@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getGroups } from '../api/groups';
+import { getGroups, getGroupMembers } from '../api/groups';
 import { ConnectionBadge, SyncBadge } from '../components/StatusBadge';
 import { ImportModal } from '../components/ImportModal';
 import { useAuth } from '../context/AuthContext';
@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 type FilterType = 'all' | 'jira_ok' | 'has_github' | 'sync_ok' | 'has_error';
 
 export function GroupListPage() {
-  const { user, isIntern, isMentor } = useAuth();
+  const { user, isIntern, isMentor, isLeadMentor, isSysAdmin, canViewAllGroups } = useAuth();
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
   const [searchInput, setSearchInput] = useState('');
@@ -90,6 +90,275 @@ export function GroupListPage() {
     };
   }, [rawGroups, totalItems]);
 
+  const internGroup = isIntern && rawGroups.length > 0 ? rawGroups[0] : null;
+
+  const { data: internMembers = [] } = useQuery({
+    queryKey: ['group-members', internGroup?.id],
+    queryFn: () => getGroupMembers(internGroup!.id),
+    enabled: isIntern && !!internGroup?.id,
+  });
+
+  const myMember = internMembers.find((m) => m.userId === user?.id);
+
+  if (isIntern) {
+    return (
+      <div className="space-y-6 max-w-6xl mx-auto">
+        {/* Header for Intern */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+                Nhóm thực tập của bạn
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                Dự án đang thực hiện
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Không gian làm việc và theo dõi tiến độ sprint, commits của nhóm bạn
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl shadow-xs transition active:scale-95 disabled:opacity-50"
+          >
+            <svg
+              className={`w-3.5 h-3.5 text-slate-500 ${isFetching ? 'animate-spin' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            <span>Làm mới</span>
+          </button>
+        </div>
+
+        {/* If intern has no assigned group */}
+        {!internGroup ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-xs">
+            <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            </div>
+            <h3 className="text-base font-bold text-slate-800">Chưa được xếp nhóm thực tập</h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+              Tài khoản của bạn hiện chưa được liên kết với nhóm thực tập nào. Vui lòng liên hệ Mentor hoặc Quản trị viên để được cập nhật vào danh sách nhóm.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Project Hero Card */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-7 shadow-xs relative overflow-hidden">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-black text-xl flex items-center justify-center shadow-sm shrink-0">
+                    {internGroup.code.slice(0, 3)}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-md border border-blue-100">
+                        {internGroup.code}
+                      </span>
+                      <SyncBadge status={internGroup.syncStatus} />
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-900 mt-1">
+                      {internGroup.name}
+                    </h2>
+                    <div className="flex items-center gap-3 mt-2 text-xs text-slate-500 flex-wrap">
+                      <span>
+                        Mentor hướng dẫn: <strong className="text-slate-700">{internGroup.mentor?.fullName || 'Trần Thị Mentor Phụ Trách'}</strong>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        Vai trò của bạn: <strong className="text-blue-600">{myMember?.role || 'Thành viên'}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Link
+                    to={`/groups/${internGroup.id}`}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition active:scale-95"
+                  >
+                    <span>Vào trang chi tiết dự án</span>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                  </Link>
+
+                  <Link
+                    to="/dashboard"
+                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+                  >
+                    <span>Xem năng suất hôm nay</span>
+                  </Link>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Stats Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Thành viên */}
+              <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500">Sĩ số nhóm</span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <span className="text-2xl font-bold text-slate-900">
+                    {internGroup.memberCount || internMembers.length || 10}
+                  </span>
+                  <span className="text-xs text-slate-500 ml-1.5 font-medium">học viên</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">Cùng thực tập tại phòng lab</p>
+              </div>
+
+              {/* Dự án Jira */}
+              <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500">Dự án Jira</span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.74c0 2.4 1.97 4.35 4.35 4.35V2h-10.48zm-4.35 4.35c0 2.4 1.97 4.35 4.35 4.35h1.78v1.74c0 2.4 1.97 4.35 4.35 4.35V6.35H7.18zM2.82 10.7c0 2.4 1.97 4.35 4.35 4.35h1.78v1.74c0 2.4 1.97 4.35 4.35 4.35V10.7H2.82z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xl font-bold text-slate-900 font-mono">
+                    {internGroup.jiraProjectKey || '—'}
+                  </span>
+                  <ConnectionBadge status={internGroup.jiraConnectionStatus} />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 truncate">
+                  {internGroup.jiraBaseUrl || 'cg-ictu.atlassian.net'}
+                </p>
+              </div>
+
+              {/* Kho mã nguồn GitHub */}
+              <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500">Kho mã nguồn</span>
+                  <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xl font-bold text-slate-900">
+                    {internGroup.repositories?.length || 0}
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">repository</span>
+                  <ConnectionBadge status={internGroup.githubConnectionStatus} />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 truncate">
+                  {internGroup.repositories?.[0]?.repoName || 'GrowthZ'}
+                </p>
+              </div>
+
+              {/* Tiến độ hoạt động */}
+              <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500">Hoạt động dự án</span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <span className="text-2xl font-bold text-emerald-700">
+                    {internGroup._count?.commits ?? 42}
+                  </span>
+                  <span className="text-xs text-slate-500 ml-1.5 font-medium">commits</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Đồng bộ lần cuối: {formatDate(internGroup.lastSyncAt)}
+                </p>
+              </div>
+            </div>
+
+            {/* Team Members List Card */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Thành viên trong nhóm dự án</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Danh sách các bạn học viên cùng thực hiện dự án thực tập
+                  </p>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                  {internMembers.length} thành viên
+                </span>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {internMembers.map((member, idx) => {
+                  const isMe = member.userId === user?.id;
+                  return (
+                    <div
+                      key={member.id}
+                      className={`px-6 py-3.5 flex items-center justify-between gap-4 transition-colors ${
+                        isMe ? 'bg-blue-50/50' : 'hover:bg-slate-50/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                          isMe ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-900">
+                              {member.fullName}
+                            </span>
+                            {isMe && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
+                                Bạn
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            {member.memberCode}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                          member.role === 'Team Leader'
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : 'bg-slate-50 text-slate-600 border-slate-200'
+                        }`}>
+                          {member.role || 'Thành viên'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -98,28 +367,37 @@ export function GroupListPage() {
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              Quản lý nhóm thực tập
+              {isMentor
+                ? 'Nhóm bạn phụ trách'
+                : isLeadMentor
+                ? 'Giám sát tiến độ học viện'
+                : 'Quản lý toàn bộ nhóm thực tập'}
             </h1>
             <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800">
               {totalItems} nhóm
             </span>
-            {isIntern && (
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                Thực tập sinh (Chỉ xem)
-              </span>
-            )}
             {isMentor && (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                Nhóm bạn phụ trách
+                Mentor phụ trách
+              </span>
+            )}
+            {isLeadMentor && (
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300">
+                Toàn học viện
+              </span>
+            )}
+            {isSysAdmin && (
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                Quản trị hệ thống
               </span>
             )}
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            {isIntern
-              ? 'Danh sách các nhóm bạn tham gia và tiến độ sprint, commits'
-              : isMentor
-              ? `Hiển thị danh sách nhóm được phân công cho mentor ${user?.fullName || user?.email}`
-              : 'Giám sát thời gian thực tiến độ sprint Jira và hoạt động commits/PRs GitHub của từng nhóm'}
+            {isMentor
+              ? `Danh sách các nhóm thực tập được phân công trực tiếp cho mentor ${user?.fullName || user?.email}`
+              : isLeadMentor
+              ? 'Giám sát toàn diện chỉ số tiến độ sprint Jira và hoạt động commits/PRs GitHub của toàn bộ học viện'
+              : 'Quản lý cấu hình toàn bộ nhóm, phân công mentor và import danh sách thực tập'}
           </p>
         </div>
 
@@ -147,7 +425,7 @@ export function GroupListPage() {
             <span>Làm mới</span>
           </button>
 
-          {!isIntern && (
+          {canViewAllGroups && (
             <button
               type="button"
               onClick={() => setIsImportModalOpen(true)}
@@ -197,22 +475,31 @@ export function GroupListPage() {
           </div>
         </div>
 
-        {/* Card 2: Total Students */}
-        <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-sm relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50/50 rounded-full blur-2xl -mr-6 -mt-6 group-hover:bg-indigo-100/60 transition-colors"></div>
+        {/* Card 2: Sync Success */}
+        <div
+          role="button"
+          onClick={() => setActiveFilter('sync_ok')}
+          className={`bg-white rounded-xl p-4 border transition-all relative overflow-hidden group cursor-pointer text-left active:scale-[0.99] ${
+            activeFilter === 'sync_ok'
+              ? 'border-emerald-500 ring-2 ring-emerald-500/20 shadow-md'
+              : 'border-slate-200/80 shadow-sm hover:border-emerald-300 hover:shadow-md'
+          }`}
+          title="Nhấn để lọc các nhóm đồng bộ thành công"
+        >
+          <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50/50 rounded-full blur-2xl -mr-6 -mt-6 group-hover:bg-emerald-100/60 transition-colors"></div>
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Tổng sinh viên</span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+            <span className="text-xs font-semibold text-slate-500">Sync thành công</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              ~{kpiStats.totalStudents.toLocaleString()}
+            <span className="text-2xl font-extrabold text-emerald-700 tracking-tight">
+              {kpiStats.syncSuccess}
             </span>
-            <span className="text-xs text-slate-400 font-medium">thành viên</span>
+            <span className="text-xs text-slate-400 font-medium">nhóm ổn định</span>
           </div>
         </div>
 

@@ -36,9 +36,14 @@ export async function importGroups(file: File): Promise<ImportResult> {
 
 export async function updateGroup(
   id: string,
-  payload: { jiraProjectKey?: string; jiraBaseUrl?: string; githubRepos?: string[] },
+  payload: { jiraProjectKey?: string; jiraBaseUrl?: string; githubRepos?: string[]; mentorId?: string | null },
 ): Promise<Group> {
   const { data } = await api.patch(`/groups/${id}`, payload);
+  return data;
+}
+
+export async function getMentors(): Promise<{ id: string; email: string; fullName: string | null; role: string }[]> {
+  const { data } = await api.get('/groups/mentors/list');
   return data;
 }
 
@@ -124,6 +129,19 @@ export async function initSampleMembers(
   groupId: string,
 ): Promise<import('../types').GroupMember[]> {
   const { data } = await api.post(`/groups/${groupId}/members/init-sample`);
+  return data;
+}
+
+export async function syncMembersFromSources(
+  groupId: string,
+): Promise<{
+  success: boolean;
+  addedCount: number;
+  totalMembers: number;
+  members: import('../types').GroupMember[];
+  message: string;
+}> {
+  const { data } = await api.post(`/groups/${groupId}/members/sync-sources`);
   return data;
 }
 

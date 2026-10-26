@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SyncService, SyncGroupResult } from './sync.service';
+import { MetricsService } from '../metrics/metrics.service';
+import { toVnDateString } from '../../common/utils/date.util';
+
 
 export interface BatchSyncSummary {
   startedAt: Date;
@@ -21,9 +24,10 @@ export class SyncSchedulerService {
   private isRunning = false;
   private lastSummary: BatchSyncSummary | null = null;
 
-  constructor(
+    constructor(
     private readonly prisma: PrismaService,
     private readonly syncService: SyncService,
+    private readonly metricsService: MetricsService,
   ) {}
 
   /**
@@ -133,9 +137,27 @@ export class SyncSchedulerService {
     this.lastSummary = summary;
     this.isRunning = false;
 
-    this.logger.log(
+        this.logger.log(
       `Finished sync batch in ${summary.durationMs}ms: Total=${summary.totalGroups}, Success=${summary.successCount}, Partial=${summary.partialCount}, Error=${summary.errorCount}, Skipped=${summary.skippedCount}`,
     );
+
+    // US-20: Compute metric sau khi sync hoàn tất.
+    // Lỗi compute metric không làm thay đổi kết quả sync.
+    try {
+      const today = toVnDateString();
+      const metricResult = await this.metricsService.computeForDate(today);
+
+      this.logger.log(
+        `[US-20] Metrics computed after cron: ${metricResult.computed}/${metricResult.total} in ${metricResult.durationMs}ms`,
+      );
+    } catch (metricErr: unknown) {
+      const message =
+        metricErr instanceof Error ? metricErr.message : String(metricErr);
+
+      this.logger.error(
+        `[US-20] Metrics compute failed after cron: ${message}`,
+      );
+    }
 
     return summary;
   }

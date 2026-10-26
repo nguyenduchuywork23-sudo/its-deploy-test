@@ -1,7 +1,8 @@
 // backend/src/modules/dashboard/dashboard.service.ts
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseVnDay, toVnDateString } from '../../common/utils/date.util';
+import { Role } from '@prisma/client';
 
 export type DataStatus = 'VALID' | 'NO_SYNC' | 'SYNC_ERROR';
 
@@ -63,7 +64,10 @@ export class DashboardService {
    *   - Trạng thái group.syncStatus
    * → xác định dataStatus: VALID / NO_SYNC / SYNC_ERROR
    */
-  async getDashboard(dateInput?: string): Promise<DashboardResult> {
+  async getDashboard(
+    dateInput?: string,
+    user?: { id: string; role: Role },
+  ): Promise<DashboardResult> {
     const dateStr = dateInput ?? toVnDateString();
     let range;
     try {
@@ -72,8 +76,18 @@ export class DashboardService {
       throw new BadRequestException((err as Error).message);
     }
 
-    // Lấy tất cả nhóm + repo count + metric của ngày
+    const where: any = {};
+    if (user) {
+      if (user.role === Role.MENTOR) {
+        where.mentorId = user.id;
+      } else if (user.role === Role.INTERN) {
+        where.members = { some: { userId: user.id } };
+      }
+    }
+
+    // Lấy các nhóm theo quyền + repo count + metric của ngày
     const groups = await this.prisma.group.findMany({
+      where,
       orderBy: { code: 'asc' },
       include: {
         repositories: { select: { id: true } },
@@ -237,15 +251,28 @@ for (const row of latestLogs) {
    * Chi tiết hoạt động của 1 nhóm trong ngày.
    * Dùng cho trang chi tiết nhóm (Day 4).
    */
-  async getGroupActivity(groupId: string, dateInput?: string) {
+  async getGroupActivity(
+    groupId: string,
+    dateInput?: string,
+    user?: { id: string; role: Role },
+  ) {
     const dateStr = dateInput ?? toVnDateString();
     const range = parseVnDay(dateStr);
 
     const group = await this.prisma.group.findUnique({
       where: { id: groupId },
-      include: { repositories: true },
+      include: { repositories: true, members: true },
     });
     if (!group) throw new BadRequestException('Không tìm thấy nhóm');
+
+    if (user) {
+      if (user.role === Role.MENTOR && group.mentorId !== user.id) {
+        throw new ForbiddenException('Bạn chỉ có quyền xem nhóm được gắn với tài khoản của mình');
+      }
+      if (user.role === Role.INTERN && !group.members.some((m) => m.userId === user.id)) {
+        throw new ForbiddenException('Bạn chỉ có quyền xem nhóm mà bạn là thành viên');
+      }
+    }
 
     const [metric, jiraDone, commits, prsCreated, prsMerged] = await Promise.all([
       this.prisma.dailyGroupMetric.findUnique({

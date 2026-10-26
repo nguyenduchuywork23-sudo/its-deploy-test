@@ -7,8 +7,10 @@ import { DashboardFilter } from '../components/dashboard/DashboardFilter';
 import type { DashboardFilterType } from '../components/dashboard/DashboardFilter';
 import { DashboardTable } from '../components/dashboard/DashboardTable';
 import type { ComputeResult } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export function MentorDashboardPage() {
+  const { isIntern, isMentor, isLeadMentor } = useAuth();
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
   const [activeFilter, setActiveFilter] = useState<DashboardFilterType>('ALL');
@@ -191,15 +193,27 @@ export function MentorDashboardPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              Tổng quan Tiến độ Mentor (Dashboard)
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              {isIntern
+                ? 'Tiến độ dự án nhóm hôm nay'
+                : isMentor
+                ? 'Tiến độ nhóm phụ trách hôm nay'
+                : isLeadMentor
+                ? 'Báo cáo tiến độ toàn Học viện'
+                : 'Bảng điều khiển tiến độ hệ thống'}
             </h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 font-mono">
-              {summary.total} nhóm
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 font-mono border border-slate-200">
+              {isIntern ? 'Nhóm của bạn' : isMentor ? `${summary.total} nhóm phụ trách` : `${summary.total} nhóm`}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Giám sát chỉ số năng suất (Jira Task & Git Commit/PR) toàn bộ các nhóm thực tập theo từng ngày
+            {isIntern
+              ? 'Theo dõi các nhiệm vụ Jira đã hoàn thành và hoạt động commits GitHub trong ngày của nhóm bạn'
+              : isMentor
+              ? 'Theo dõi chỉ số năng suất (Jira Task & Git Commit/PR) của các nhóm bạn trực tiếp hướng dẫn'
+              : isLeadMentor
+              ? 'Tổng hợp chỉ số năng suất và rủi ro triển khai dự án thực tập trên toàn bộ các lớp học'
+              : 'Theo dõi toàn bộ chỉ số năng suất (Jira Task & Git Commit/PR) và trạng thái tích hợp của các nhóm thực tập'}
           </p>
         </div>
 
@@ -211,28 +225,30 @@ export function MentorDashboardPage() {
             disabled={computeAllMutation.isPending}
           />
 
-          <button
-            type="button"
-            onClick={() => computeAllMutation.mutate()}
-            disabled={computeAllMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition active:scale-95 disabled:opacity-50"
-            title="Tính toán và tổng hợp lại metric từ các issue/commits trong ngày"
-          >
-            <svg
-              className={`w-3.5 h-3.5 ${computeAllMutation.isPending ? 'animate-spin' : ''}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
+          {!isIntern && (
+            <button
+              type="button"
+              onClick={() => computeAllMutation.mutate()}
+              disabled={computeAllMutation.isPending}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm hover:shadow-md transition active:scale-95 disabled:opacity-50"
+              title="Tính toán và tổng hợp lại metric từ các issue/commits trong ngày"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            <span>{computeAllMutation.isPending ? 'Đang tính toán...' : 'Tính lại metric'}</span>
-          </button>
+              <svg
+                className={`w-3.5 h-3.5 ${computeAllMutation.isPending ? 'animate-spin' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+              <span>{computeAllMutation.isPending ? 'Đang tính toán...' : 'Tính lại metric'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -431,47 +447,18 @@ export function MentorDashboardPage() {
       <DashboardTable
         items={filteredItems}
         isLoading={isLoading}
-        onRefreshGroup={(id) => computeGroupMutation.mutate(id)}
+        onRefreshGroup={isIntern ? undefined : (id) => computeGroupMutation.mutate(id)}
         syncingGroupId={syncingGroupId}
         selectedDate={selectedDate}
       />
 
-      {/* Footer Hint Giải Thích 3 Trạng Thái (AC8) */}
-      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 text-xs text-slate-500 space-y-2">
-        <h4 className="font-bold text-slate-700 flex items-center gap-2">
-          <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <span>Ý nghĩa 3 trạng thái dữ liệu (3-State Display System):</span>
-        </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] pt-1">
-          <div className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-start gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 mt-0.5" />
-            <div>
-              <strong className="text-emerald-800">VALID (Hợp lệ):</strong> Dữ liệu Jira và GitHub đã đồng bộ thành công, các cột hiển thị số liệu thực tế (kể cả số 0).
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-start gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0 mt-0.5" />
-            <div>
-              <strong className="text-rose-800">SYNC_ERROR (Lỗi đồng bộ):</strong> Quá trình fetch API gặp lỗi kết nối hoặc sai token, các chỉ số hiển thị ký hiệu{' '}
-              <code className="text-rose-600 font-bold bg-rose-50 px-1 rounded">—</code> trên nền hồng.
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-start gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0 mt-0.5" />
-            <div>
-              <strong className="text-slate-800">NO_SYNC (Chưa sync):</strong> Nhóm chưa cấu hình dự án hoặc chưa kích hoạt đồng bộ, hiển thị ký hiệu{' '}
-              <code className="text-slate-600 font-bold bg-slate-100 px-1 rounded">?</code> trên nền xám.
-            </div>
-          </div>
+      {/* Footer Status Legend */}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 py-2.5 px-4 bg-white border border-slate-200/80 rounded-xl">
+        <div className="flex items-center gap-4 flex-wrap text-[11px]">
+          <span className="font-semibold text-slate-600">Trạng thái dữ liệu:</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Hợp lệ (VALID)</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-500" /> Lỗi đồng bộ (SYNC_ERROR)</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-400" /> Chưa cấu hình / Chưa sync (NO_SYNC)</span>
         </div>
       </div>
     </div>
