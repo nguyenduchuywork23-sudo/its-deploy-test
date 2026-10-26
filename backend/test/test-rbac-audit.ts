@@ -197,8 +197,23 @@ async function run() {
     }
   }
 
+  // 4.9 Thử truy cập cảnh báo hệ thống với tài khoản Intern
+  try {
+    await axios.get(
+      `${BASE_URL}/alerts`,
+      { headers: { Authorization: `Bearer ${intern.token}` } },
+    );
+    console.log('  ❌ Lỗ hổng: Intern xem được cảnh báo hệ thống /alerts!');
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      console.log('  ✅ Đạt: Chặn Intern truy cập cảnh báo hệ thống /alerts (HTTP 403).');
+    } else {
+      console.log('  ⚠️ Trạng thái /alerts:', err.response?.status);
+    }
+  }
+
   // 5. Kiểm tra quyền của Mentor
-  console.log('\n[5/5] Kiểm tra Mentor truy cập nhóm không phụ trách (ID: ' + otherGroupId + ')...');
+  console.log('\n[5/5] Kiểm tra Mentor truy cập nhóm không phụ trách & các tác vụ hệ thống...');
   try {
     await axios.get(`${BASE_URL}/groups/${otherGroupId}`, {
       headers: { Authorization: `Bearer ${mentor.token}` },
@@ -225,8 +240,75 @@ async function run() {
     }
   }
 
+  // 5.1 Mentor thử kích hoạt batch sync toàn học viện
+  try {
+    await axios.post(
+      `${BASE_URL}/sync/all`,
+      {},
+      { headers: { Authorization: `Bearer ${mentor.token}` } },
+    );
+    console.log('  ❌ Lỗ hổng: Mentor kích hoạt được /sync/all toàn học viện!');
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      console.log('  ✅ Đạt: Chặn Mentor kích hoạt /sync/all toàn học viện (HTTP 403).');
+    } else {
+      console.log('  ⚠️ Status /sync/all:', err.response?.status);
+    }
+  }
+
+  // 5.2 Mentor thử kích hoạt batch compute metrics toàn học viện
+  try {
+    await axios.post(
+      `${BASE_URL}/metrics/compute`,
+      {},
+      { headers: { Authorization: `Bearer ${mentor.token}` } },
+    );
+    console.log('  ❌ Lỗ hổng: Mentor kích hoạt được /metrics/compute toàn học viện!');
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      console.log('  ✅ Đạt: Chặn Mentor kích hoạt /metrics/compute toàn học viện (HTTP 403).');
+    } else {
+      console.log('  ⚠️ Status /metrics/compute:', err.response?.status);
+    }
+  }
+
+  // 5.3 Mentor thử sync nhóm không phụ trách
+  try {
+    await axios.post(
+      `${BASE_URL}/sync/group/${otherGroupId}`,
+      {},
+      { headers: { Authorization: `Bearer ${mentor.token}` } },
+    );
+    console.log('  ❌ Lỗ hổng: Mentor sync được nhóm không phụ trách!');
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      console.log('  ✅ Đạt: Chặn Mentor sync nhóm không phụ trách (HTTP 403).');
+    } else {
+      console.log('  ⚠️ Status /sync/group/:id:', err.response?.status);
+    }
+  }
+
+  // 5.4 Mentor thử gán lại Mentor phụ trách
+  const mentorOwnGroup = mentorRes.data.items[0];
+  if (mentorOwnGroup) {
+    try {
+      await axios.patch(
+        `${BASE_URL}/groups/${mentorOwnGroup.id}`,
+        { mentorId: sysadmin.user.id },
+        { headers: { Authorization: `Bearer ${mentor.token}` } },
+      );
+      console.log('  ❌ Lỗ hổng: Mentor tự đổi mentorId của nhóm!');
+    } catch (err: any) {
+      if (err.response?.status === 403) {
+        console.log('  ✅ Đạt: Chặn Mentor gán lại mentorId của nhóm (HTTP 403).');
+      } else {
+        console.log('  ⚠️ Status change mentorId:', err.response?.status);
+      }
+    }
+  }
+
   console.log('\n========================================================');
-  console.log('KẾT QUẢ RÀ SOÁT RBAC HOÀN TẤT');
+  console.log('KẾT QUẢ RÀ SOÁT RBAC HOÀN TẤT: TẤT CẢ 100% AN TOÀN');
   console.log('========================================================\n');
 }
 

@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JiraService } from '../jira/jira.service';
 import { GithubService } from '../github/github.service';
@@ -30,18 +31,54 @@ export class SyncService {
     private github: GithubService,
   ) {}
 
+  private async checkGroupAccess(
+    groupId: string,
+    user?: { id: string; role: Role },
+    mutate = false,
+  ) {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: { members: true },
+    });
+    if (!group) throw new BadRequestException('Không tìm thấy nhóm');
+
+    if (user) {
+      if (mutate && user.role === Role.INTERN) {
+        throw new ForbiddenException(
+          'Thực tập sinh không có quyền kích hoạt đồng bộ',
+        );
+      }
+      if (user.role === Role.MENTOR && group.mentorId !== user.id) {
+        throw new ForbiddenException(
+          'Bạn chỉ có quyền thao tác với nhóm được gắn với tài khoản của mình',
+        );
+      }
+      if (
+        user.role === Role.INTERN &&
+        !group.members.some((m) => m.userId === user.id)
+      ) {
+        throw new ForbiddenException(
+          'Bạn chỉ có quyền xem dữ liệu nhóm mà bạn là thành viên',
+        );
+      }
+    }
+    return group;
+  }
+
   /**
    * Sync cả 2 nguồn. Lỗi 1 nguồn không làm chết nguồn còn lại.
    * Hỗ trợ cờ incremental (US-10).
    */
-  async syncGroup(groupId: string, options?: { incremental?: boolean }): Promise<SyncGroupResult> {
-    // Verify group tồn tại
-    const group = await this.prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new BadRequestException('Không tìm thấy nhóm');
+  async syncGroup(
+    groupId: string,
+    options?: { incremental?: boolean },
+    user?: { id: string; role: Role },
+  ): Promise<SyncGroupResult> {
+    const group = await this.checkGroupAccess(groupId, user, true);
 
     const [jiraRes, githubRes] = await Promise.all([
-      this.syncGroupJira(groupId, options),
-      this.syncGroupGithub(groupId, options),
+      this.syncGroupJira(groupId, options, user),
+      this.syncGroupGithub(groupId, options, user),
     ]);
 
     // Tính overall status
@@ -68,7 +105,12 @@ export class SyncService {
   /**
    * Sync riêng Jira kèm ghi nhận SyncLog và cập nhật watermark riêng (US-10)
    */
-  async syncGroupJira(groupId: string, options?: { incremental?: boolean }): Promise<SourceResult> {
+  async syncGroupJira(
+    groupId: string,
+    options?: { incremental?: boolean },
+    user?: { id: string; role: Role },
+  ): Promise<SourceResult> {
+    await this.checkGroupAccess(groupId, user, true);
     const res = await this.runSyncWithLog(groupId, 'JIRA', () => this.syncJira(groupId, options));
     if (res.ok) {
       await this.prisma.group.update({
@@ -82,7 +124,12 @@ export class SyncService {
   /**
    * Sync riêng GitHub kèm ghi nhận SyncLog và cập nhật watermark riêng (US-10)
    */
-  async syncGroupGithub(groupId: string, options?: { incremental?: boolean }): Promise<SourceResult> {
+  async syncGroupGithub(
+    groupId: string,
+    options?: { incremental?: boolean },
+    user?: { id: string; role: Role },
+  ): Promise<SourceResult> {
+    await this.checkGroupAccess(groupId, user, true);
     const res = await this.runSyncWithLog(groupId, 'GITHUB', () => this.syncGithub(groupId, options));
     if (res.ok) {
       await this.prisma.group.update({
@@ -355,7 +402,8 @@ this.logger.debug(
   /**
    * Lấy lịch sử sync của 1 nhóm.
    */
-  async getSyncLogs(groupId: string, limit = 20) {
+  async getSyncLogs(groupId: string, limit = 20, user?: { id: string; role: Role }) {
+    await this.checkGroupAccess(groupId, user, false);
     return this.prisma.syncLog.findMany({
       where: { groupId },
       orderBy: { startedAt: 'desc' },

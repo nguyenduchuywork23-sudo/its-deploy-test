@@ -53,7 +53,11 @@ export class SyncController {
     @Query('full') full?: string,
     @Query('incremental') incremental?: string,
   ) {
-    this.checkSyncPermission(user);
+    if (user && (user.role === Role.INTERN || user.role === Role.MENTOR)) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (SysAdmin) và Lead Mentor mới có quyền kích hoạt đồng bộ toàn bộ hệ thống',
+      );
+    }
     const isIncremental = this.parseIncremental(full, incremental);
     return this.syncScheduler.syncAllGroups({ incremental: isIncremental });
   }
@@ -75,7 +79,7 @@ export class SyncController {
   ) {
     this.checkSyncPermission(user);
     const isIncremental = this.parseIncremental(full, incremental);
-    return this.sync.syncGroup(id, { incremental: isIncremental });
+    return this.sync.syncGroup(id, { incremental: isIncremental }, user);
   }
 
   /**
@@ -90,7 +94,7 @@ export class SyncController {
   ) {
     this.checkSyncPermission(user);
     const isIncremental = this.parseIncremental(full, incremental);
-    return this.sync.syncGroupJira(id, { incremental: isIncremental });
+    return this.sync.syncGroupJira(id, { incremental: isIncremental }, user);
   }
 
   /**
@@ -105,14 +109,15 @@ export class SyncController {
   ) {
     this.checkSyncPermission(user);
     const isIncremental = this.parseIncremental(full, incremental);
-    return this.sync.syncGroupGithub(id, { incremental: isIncremental });
+    return this.sync.syncGroupGithub(id, { incremental: isIncremental }, user);
   }
 
   @Get('logs/:groupId')
   getLogs(
     @Param('groupId') groupId: string,
     @Query('limit') limit?: string,
+    @CurrentUser() user?: any,
   ) {
-    return this.sync.getSyncLogs(groupId, limit ? Number(limit) : 20);
+    return this.sync.getSyncLogs(groupId, limit ? Number(limit) : 20, user);
   }
 }

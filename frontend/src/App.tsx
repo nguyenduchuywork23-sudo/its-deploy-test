@@ -44,7 +44,7 @@ export default function App() {
         <Route
           path="/alerts"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={['SYSADMIN', 'LEAD_MENTOR', 'MENTOR']}>
               <AppLayout>
                 <AlertsPage />
               </AppLayout>

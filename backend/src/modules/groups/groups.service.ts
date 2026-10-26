@@ -150,6 +150,11 @@ export class GroupsService {
       const data: any = {};
 
       if (dto.mentorId !== undefined) {
+        if (user && user.role !== Role.SYSADMIN && user.role !== Role.LEAD_MENTOR) {
+          throw new ForbiddenException(
+            'Chỉ Quản trị viên (SysAdmin) hoặc Lead Mentor mới có quyền gán hoặc thay đổi Mentor phụ trách nhóm',
+          );
+        }
         data.mentorId = dto.mentorId ? dto.mentorId : null;
       }
 
@@ -334,6 +339,12 @@ export class GroupsService {
     if (user && user.role === Role.INTERN) {
       throw new ForbiddenException('Thực tập sinh không có quyền sửa thành viên');
     }
+    const existing = await this.prisma.groupMember.findFirst({
+      where: { id: memberId, groupId },
+    });
+    if (!existing) {
+      throw new NotFoundException('Không tìm thấy thành viên trong nhóm này');
+    }
     return this.prisma.groupMember.update({
       where: { id: memberId },
       data: {
@@ -348,6 +359,12 @@ export class GroupsService {
     await this.findOne(groupId, user);
     if (user && user.role === Role.INTERN) {
       throw new ForbiddenException('Thực tập sinh không có quyền xóa thành viên');
+    }
+    const existing = await this.prisma.groupMember.findFirst({
+      where: { id: memberId, groupId },
+    });
+    if (!existing) {
+      throw new NotFoundException('Không tìm thấy thành viên trong nhóm này');
     }
     const res = await this.prisma.groupMember.delete({
       where: { id: memberId },

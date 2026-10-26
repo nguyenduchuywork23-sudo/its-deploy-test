@@ -38,7 +38,7 @@ export class MetricsController {
     if (!isValidDateString(dateStr)) {
       throw new BadRequestException(`Ngày không hợp lệ: "${dateStr}"`);
     }
-    return this.metrics.computeForGroup(id, dateStr);
+    return this.metrics.computeForGroup(id, dateStr, user);
   }
 
   /**
@@ -50,8 +50,10 @@ export class MetricsController {
     @Body() dto?: ComputeMetricsDto,
     @CurrentUser() user?: any,
   ) {
-    if (user && user.role === Role.INTERN) {
-      throw new ForbiddenException('Thực tập sinh không có quyền tính toán metric');
+    if (user && (user.role === Role.INTERN || user.role === Role.MENTOR)) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên và Lead Mentor mới có quyền tính toán metric hàng loạt',
+      );
     }
     const dateStr = date ?? toVnDateString();
     if (!isValidDateString(dateStr)) {
@@ -67,11 +69,12 @@ export class MetricsController {
   async getOne(
     @Param('id') id: string,
     @Query('date') date?: string,
+    @CurrentUser() user?: any,
   ) {
     const dateStr = date ?? toVnDateString();
     if (!isValidDateString(dateStr)) {
       throw new BadRequestException(`Ngày không hợp lệ: "${dateStr}"`);
     }
-    return this.metrics.getMetricForGroup(id, dateStr);
+    return this.metrics.getMetricForGroup(id, dateStr, user);
   }
 }

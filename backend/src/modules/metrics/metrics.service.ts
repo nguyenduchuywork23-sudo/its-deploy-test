@@ -1,5 +1,5 @@
-// backend/src/modules/metrics/metrics.service.ts
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseVnDay, type VnDayRange } from '../../common/utils/date.util';
 import {
@@ -43,9 +43,27 @@ export class MetricsService {
    * Tính metric cho 1 nhóm / 1 ngày.
    * Idempotent: dùng upsert theo (groupId, date).
    */
-  async computeForGroup(groupId: string, dateStr: string): Promise<ComputeOneResult> {
-    const group = await this.prisma.group.findUnique({ where: { id: groupId } });
+  async computeForGroup(
+    groupId: string,
+    dateStr: string,
+    user?: { id: string; role: Role },
+  ): Promise<ComputeOneResult> {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: { members: true },
+    });
     if (!group) throw new BadRequestException(`Không tìm thấy nhóm ${groupId}`);
+
+    if (user) {
+      if (user.role === Role.INTERN) {
+        throw new ForbiddenException('Thực tập sinh không có quyền tính toán metric');
+      }
+      if (user.role === Role.MENTOR && group.mentorId !== user.id) {
+        throw new ForbiddenException(
+          'Bạn chỉ có quyền tính toán metric cho nhóm được gắn với tài khoản của mình',
+        );
+      }
+    }
 
     const range = parseVnDay(dateStr);
 
@@ -195,7 +213,30 @@ export class MetricsService {
   /**
    * Lấy metric của 1 nhóm / 1 ngày (nếu có).
    */
-  async getMetricForGroup(groupId: string, dateStr: string) {
+  async getMetricForGroup(
+    groupId: string,
+    dateStr: string,
+    user?: { id: string; role: Role },
+  ) {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: { members: true },
+    });
+    if (!group) throw new BadRequestException(`Không tìm thấy nhóm ${groupId}`);
+
+    if (user) {
+      if (user.role === Role.MENTOR && group.mentorId !== user.id) {
+        throw new ForbiddenException(
+          'Bạn chỉ có quyền xem metric nhóm được gắn với tài khoản của mình',
+        );
+      }
+      if (user.role === Role.INTERN && !group.members.some((m) => m.userId === user.id)) {
+        throw new ForbiddenException(
+          'Bạn chỉ có quyền xem metric nhóm bạn là thành viên',
+        );
+      }
+    }
+
     const range = parseVnDay(dateStr);
     const metric = await this.prisma.dailyGroupMetric.findUnique({
       where: { groupId_date: { groupId, date: range.dateOnly } },
